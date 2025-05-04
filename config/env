@@ -12,7 +12,8 @@ test_odsl="odsl/office_transpile.py"
 test_markdown="markdown/markdown_transpile.py"
 test_unitymol="molcommand/unitymol_transpile.py"
 test_unitymol2="molcommand/unitymol2_transpile.py"
-# Add more as needed...
+test_pymol="molcommand/pymol_transpile.py"
+test_llmprompt="molcommand/llmprompt_transpile.py"
 
 # DSL
 markdown = "./markdown/"
