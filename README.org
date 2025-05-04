@@ -1,0 +1,66 @@
+#+TITLE: MolCommandNL - User intent to Domain Specific Language to Application
+
+* Repository structure
+
+** Top (current) directory
+- =README.org= this description
+- =Makefile= to handle common tasks (see below)
+  
+** =config/= global project configuration
+- =env= : tried as much as possible to take out hard-coded options
+  from the scripts and centrally put in this file. This includes the
+  names of key scripts, where the proper python environment is found,
+  what the subdirectory paths are for the available DSLs and for all
+  LLM setups
+  
+** =script/=
+
+Core classes:
+- =prepare_sample_store.py= this is to initialize and populate the
+  ChromaDB sample store for RAG retrievals. We give it samples in YAML
+  format, it normalizes them and stores their embedding and metadata
+  in ChromaDB. This is one initially for setup, or whenever we add new
+  samples.
+- =semantic_interpreter.py= this is the core class inspired from the
+  Microsoft paper about OfficDSL using a semantic approach for program
+  synthesis. It translates the user intent into DSL code, with a
+  number of normalizations and verifications. For that it uses the
+  following two scripts:
+  - =dsl_interface.py= a generic interface class that is customized for
+    each DSL in its sub-folder
+  - =llm_client.py= a class helping with calling ollama and managing
+    prompts and roles
+
+User interfaces:
+- =example-usage.py= a simple script to run one or more tests as batch
+- =chat_cli.py= a chat-like interface, either in a simple mode
+  (=--simple=) or in a richer terminal layout mode
+
+Helpers:
+- =utils.py= generic helper functions, for instance to load
+  configuration files, or yaml or json etc.
+- =stream_capture.py= this is a helper class to try and capture all
+  stdout, stderr and logger output for my chat interface
+- =dsl_utils.py= helper functions to load several DSL classes or a
+  chosen transpiler from a given path. Used by the user interfaces and
+  by the sample store preparation.
+- =get_embedding_function.py= a class to handle LLM embedding for
+  storing/retrieving samples
+- =validate_json.py= used it to validate a json file with context
+  information, as I had some typos and issues to correct
+
+** Domain specific language (DSL)-related subdirectories
+*** =odsl/=
+*** =markdown/=
+*** =molcommand/=
+
+** =doc/=
+Not much there yet, except for a few uml schemes that were useful in
+conceptualizing the project.
+
+** =templates/=
+A few generic code stubs that can be useful in the future.
+- =basic_ast_transpiler_class.py= is a basic skeleton for transpiling
+  abstract syntax tree (AST) code to final target commands.
+- =basic_dsl_transpiler_class.py= is a basic skeleton for transpiling
+  a synthesized DSL program directly (for instance with an LLM)
