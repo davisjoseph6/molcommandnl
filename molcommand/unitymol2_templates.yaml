@@ -1,0 +1,107 @@
+# templates.yml
+add_sticks:
+  required: ["selection"]
+  template: 'showSelection("{{ selection }}", "hb")'
+
+add_surface:
+  required: ["selection"]
+  template: 'showSelection("{{ selection }}", "s")'
+
+add_ribbon:
+  required: ["selection"]
+  template: 'showSelection("{{ selection }}", "r")'
+
+add_label:
+  required: ["position", "text", "color"]
+  template: 'annotateWorldText({{ position }}, 0.2, "{{ text }}", {{ color }})'
+
+add_structure:
+  variants:
+    - required: ["PDBID"]
+      template: 'fetch("{{ PDBID }}")'
+    - required: ["filePath"]
+      template: 'load("{{ filePath }}")'
+  default:
+    template: 'load("{{ file|default("1crn") }}")'
+
+select_structure:
+  required: ["name"]
+  side_effect: store_selection
+  template: null
+
+select_atoms:
+  required: ["residue", "atom", "name"]
+  template: 'select("resname {{ residue }} and name {{ atom }}", "{{ name }}")'
+
+select_residues:
+  required: ["ids", "name"]
+  template: 'select("resid {{ ids }}", "{{ name }}")'
+
+update_color:
+  required: ["selection", "color"]
+  template: 'colorSelection("{{ selection }}", "{{ type|default("hb") }}", {{ color }})'
+
+update_visibility:
+  required: ["selection", "visible"]
+  template: '{% if visible %}showSelection{% else %}hideSelection{% endif %}("{{ selection }}")'
+
+update_animation:
+  required: ["trajectory", "frame"]
+  template: 'setModel("{{ trajectory }}", {{ frame }})'
+
+#delete_structure:
+#  pattern: "has_structure_name_or_previous"
+#  template: 'delete("{{ previous_selections.structureName }}")'
+#  side_effect: "_clear_selection"
+delete_structure:
+  pattern: has_structure_name_or_previous
+  template: delete("{{ delete_target }}")  # Use pre-computed value
+  side_effect: _clear_selection
+
+delete_sticks:
+  required: ["selection"]
+  template: 'hideSelection("{{ selection }}", "h")'
+
+delete_surface:
+  required: ["selection"]
+  template: 'hideSelection("{{ selection }}", "s")'
+
+add_structure:
+  variants:
+    - required: ["PDBID"]
+      template: 'fetch("{{ PDBID }}")'
+    - required: ["filePath"]
+      template: 'load("{{ filePath }}")'
+  default:
+    template: 'load("{{ file|default("1crn") }}")'
+
+add_label:
+  required: ["position", "text", "color"]
+  template: 'annotateWorldText({{ position }}, 0.2, "{{ text }}", {{ color }})'
+
+select_structure:
+  required: ["name"]
+  side_effect: "store_selection"
+  template: ""
+
+update_color:
+  required: ["selection", "color"]
+  template: 'colorSelection("{{ selection }}", "{{ type|default("hb") }}", {{ color }})'
+
+# templates.yml
+add_molecule:
+  variants:
+    - pattern: "is_organic and radius_gt_5"
+      template: "addOrganic({{ radius }})"
+#    - pattern: "args.get('is_metallic', False)"
+#      template: "addMetal({{ weight }})"
+  default:
+    template: "addMolecule({{ name }})"
+
+# In templates.yml
+validate_molecule:
+  pattern: "valid_radius"
+  template: 'validate({{ radius }})'
+color_selection:
+  required: ["selection", "color"]
+  template: 'colorSelection("{{ selection }}", {{ color }})'

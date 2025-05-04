@@ -1,0 +1,38 @@
+{
+    "id": "pres1",
+    "_type": "presentation",
+    "title": "Climate Change",
+    "slides": [
+        {
+            "index": 0,
+            "_type": "slide",
+            "layout": "Title",
+            "shapes": [
+                {
+                    "index": 0,
+                    "_type": "shape",
+                    "name": "Title",
+                    "textRange": {
+                        "_type": "textRange",
+                        "text": "Dogs",
+                        "color": "#000000",
+                        "bold": true,
+                        "fontName": "Segoe UI",
+                        "fontSize": 36
+                    },
+                    "type": "Textbox",
+                    "fillColor": "",
+                    "top": 50,
+                    "height": 75
+                },
+                {
+                    "index": 1,
+                    "name": "Content Placeholder 1",
+                    "textRange": {
+                        "text": "Dogs are the best."
+                    }
+                }
+            ]
+        }
+    ]
+}

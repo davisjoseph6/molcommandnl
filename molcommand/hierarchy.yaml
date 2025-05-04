@@ -1,0 +1,33 @@
+# MolCommandNL Scope Validation Rules (Minimal Version) based on Entity Hierarchy Schema (for UnityMol)
+
+# Default scopes for select_* statements when none is provided
+# Injects defaults when scope is missing.
+scope_defaults:
+  select_structures: "Scene"     # Default: all structures in the scene ; alternative: last() ?
+  select_models: "Selection"     # Default: all models in the last() selection
+  select_chains: "Selection"     # Default: all chains in the last() selection
+  select_residues: "Selection"   # Default: all residues in the last() selection
+  select_atoms: "Selection"     # Default: all atoms in the last() selection
+
+# Valid scope targets for each entity (derived from hierarchy)
+# Enforces hierarchy rules during validation.
+valid_scopes:
+  #  scene: [scene, structure]        # Can scope from presentation or slide
+  structure: [scene, structure]                      # Can scope from same or superior level
+  model: [scene, structure, model]
+  chain: [scene, structure, model, chain]
+  residue: [scene, structure, model, chain, residue]
+  atom: [scene, structure, model, chain, residue, atom, selection]
+
+# Special scope keywords (treated as wildcards)
+# Bypasses validation
+special_scopes: ["Scene", "Selection"]
+
+# New: Contextual selection rules (metadata keys)
+contextual_scopes:
+  # Format: "entity_type": ["allowed_metadata_keys"]
+  # scene: None
+  structure: ["name"]            # e.g., select_structure(name="1kx2")
+  model: ["structureName","frameStart","frameEnd","step"]   # e.g., select_model(frameStart=1)
+  chain: ["style", "language"]        # e.g., select_text(style="Heading")
+  residue: ["selName","type", "startColor", "endColor"]

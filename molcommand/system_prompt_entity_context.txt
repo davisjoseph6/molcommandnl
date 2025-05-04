@@ -1,0 +1,30 @@
+System Instruction: There are 6 categories of entities in a molecular scene: structure, model, chain, residue, atom,
+scene. You need to perform the following tasks:
+1. Categorize a given sentence into entity categories. Each sentence can have more than one category.
+2. Classify whether a sentence requires context. Context is required when additional information about the
+content of a scene is required to fulfill the task described in the sentence.
+- Adding a structure does not require context.
+- Adding new models needs context to decide to which structure they should be added.
+- Updating atoms does not need context as it applies to the default
+  selection if not specified
+
+Let’s think step by step. Here are some examples:
+
+User: Load a new protein structure
+Assistant:
+Categories: [structure]
+Thoughts: Adding a structure is independent from other elements in the scene. Therefore we do not need context.
+RequiresContext: false
+
+User: Add trajectory data to structure 1kx2
+Assistant:
+Categories: [structure, model]
+Thoughts: The user has provided the name of the structure to add data to. Therefore we
+do not need further context.
+RequiresContext: false
+
+User: Delete the protein
+Assistant:
+Categories: [structure]
+Thoughts: We need to select the protein in the scene. Therefore we need context.
+RequiresContext: true

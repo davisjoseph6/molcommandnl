@@ -1,0 +1,11 @@
+global_rules:
+  - text: "Use only the statements defined in the provided DSL syntax"
+  - text: "Every update_* or delete_* command must be preceded by a select_* or add_*"
+  - text: "Variables must be declared before use"
+  - text: "Do not use loops, conditionals, list indexing, or any control flow"
+  - text: "Use snake_case for DSL statements and camelCase for parameters"
+  - text: "Keep code compact and consistent; avoid redundancy or undocumented syntax"
+
+entity_rules:
+  - text: "Always add either a 'name' or 'last()' to select_structure()"
+    entities: ["structure"]

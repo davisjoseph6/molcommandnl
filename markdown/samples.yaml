@@ -1,0 +1,35 @@
+# dsl_definition.py
+- utterance: "Make the first line bold"
+  entities: ["text", "line"]
+  context: null
+  program: |
+    line = select_line(index=0)
+    format_text(lines=line, bold=True)
+
+- utterance: "Convert the title to a level 2 heading"
+  entities: ["text", "line"]
+  context: null
+  program: |
+    line = select_line(index=0)
+    format_heading(lines=line, level=2)
+
+- utterance: "Emphasize the quoted sentence"
+  entities: ["text"]
+  context: null
+  program: |
+    quote = select_text(textType="quote")
+    format_text(lines=quote, italic=True)
+
+- utterance: "Turn the selected text into a bullet list"
+  entities: ["text"]
+  context: null
+  program: |
+    sel = select_text(scope="Selection")
+    format_list(lines=sel, style="bullet")
+
+- utterance: "Add a horizontal line after the paragraph"
+  entities: ["text", "paragraph"]
+  context: null
+  program: |
+    para = select_paragraph(scope="Selection")
+    insert_rule(after=para)

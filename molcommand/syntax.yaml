@@ -1,0 +1,37 @@
+global_syntax:
+  - text: "All select/add statements return lists of entities"
+  - text: "'scope' defaults to the current user selection if omitted"
+  - text: "Enumerations must match exactly one of the allowed values"
+  - text: "Numeric parameters may be integers or floats"
+
+select_statements:
+  - text: "select_slides(scope=<Presentation|Selection|slides>, index=<int>?, name=<str>?)"
+    entities: ["slides"]
+  - text: "select_shapes(scope=<Presentation|Selection|slides>, shapeType=<str>?, name=<str>?, index=<int>?)"
+    entities: ["shapes"]
+  - text: "select_text(scope=<Presentation|Selection|shapes|slides>, text=<str>?, name=<str>?, style=<str>?)"
+    entities: ["text"]
+  - text: "select_images(scope=<Presentation|Selection|slides>, description=<str>?)"
+    entities: ["images"]
+
+add_statements:
+  - text: "add_slides(precededBy=<slides>, layout=<str>)"
+    entities: ["slides"]
+  - text: "add_shapes(slides=<slides>, shapeType=<str>)"
+    entities: ["shapes"]
+  - text: "add_text(precededBy=<entity>, text=<str>)"
+    entities: ["text"]
+  - text: "add_images(slides=<slides>, description=<str>)"
+    entities: ["images"]
+
+update_statements:
+  - text: "update_text(textRanges=<textRanges>, fontName=<str>?, size=<Number>?, bold=<bool>?, italic=<bool>?, underline=<None|Single|Double|Wavy>, color=<str>?, bulleted=<bool>?, horizontalAlignment=<Left|Center|Right>)"
+    entities: ["text"]
+  - text: "update_shapes(shapes=<shapes>, fillColor=<str>?, fillTransparency=<Number [0-1]>?, lineColor=<str>?, lineTransparency=<Number [0-1]>?, top=<Number>, left=<Number>, height=<Number>, width=<Number>)"
+    entities: ["shapes"]
+
+delete_statements:
+  - text: "delete_shapes(shapes=<shapes>)"
+    entities: ["shapes"]
+  - text: "delete_text(textRanges=<textRanges>)"
+    entities: ["text"]

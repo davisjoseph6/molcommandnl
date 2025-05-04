@@ -1,0 +1,15 @@
+global_rules:
+  - text: "Use only the statements defined in the provided DSL syntax"
+  - text: "Every format_* or delete_* command must be preceded by a select_* or insert_*"
+  - text: "Variables must be declared before use"
+  - text: "Do not use loops, conditionals, list indexing, or any control flow"
+  - text: "Use snake_case for DSL statements and camelCase for parameters"
+  - text: "Enumerations (e.g. underline, horizontalAlignment) must exactly match allowed values"
+  - text: "Numeric values should respect their constraints (e.g. 0 <= transparency <= 1)"
+  - text: "All operations must be reversible with undo; do not generate irreversible calls"
+  - text: "If invalid values are detected, apply automatic correction (fuzzy matching, clamping, aliasing)"
+  - text: "Keep code compact and consistent; avoid redundancy or undocumented syntax"
+
+entity_rules:
+  - text: "Always add a scope of 'document' to select_text()"
+    entities: ["text"]

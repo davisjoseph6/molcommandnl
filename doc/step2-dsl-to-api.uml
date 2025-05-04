@@ -1,0 +1,48 @@
+@startuml
+!theme blueprint
+skinparam componentStyle rectangle
+title DSL to Target Software Commands
+
+' Define the layout to be left-to-right (optional)
+' left to right direction
+
+' DSL
+Package "DSL Program\nfrom previous step" as DSL
+
+Package "DSL to Commands" as core {
+' LLM+RAG
+rectangle "Option: LLM + RAG" as Option1 {
+  component "Some\nLLM\nMagic" as Llm
+}
+
+' Transpilation
+rectangle "Option: Templating" as Option2 {
+  component "Template\nEngine\n(Mustache?)" as Tengine
+}
+
+' Transpilation
+rectangle "Option: Transpilation" as Option3 {
+  component "Parser\n(DSL→AST)" as Parser
+  component "Transpilation\n(AST→Native\nApp APIs)" as Transpilation
+
+  Parser -> Transpilation
+}
+}
+
+' Execution layer  
+Package "Execution Layer (opt.)" as exe {
+  component "Execution\n(MCP..)" as Execution
+  component "Result\n(observe)" as Result
+}
+
+' Main flow connections
+'DSL --> Llm
+'DSL --> Tengine
+'DSL --> Parser
+DSL --> core
+core --> exe
+'Llm --> Execution
+'Tengine --> Execution
+'Transpilation --> Execution
+Execution -> Result
+@enduml

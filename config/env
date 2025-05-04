@@ -1,0 +1,27 @@
+# Makefile
+APYTHON="/opt/homebrew/anaconda3/bin/python3"
+TESTSCRIPT="script/example-usage.py"
+CHATSCRIPT="script/chat_cli.py"
+POPULATESCRIPT="script/prepare_sample_store.py"
+LLMCLIENT="script/llm_client.py"
+SEMINTERP="script/semantic_interpreter.py"
+CHROMAPATH="/opt/data/RAG/chroma/"
+CONFIGPATH = "./config"
+
+# DSL
+markdown = "./markdown/"
+odsl = "./odsl/"
+molcommand = "./molcommand/"
+
+# Language Model Settings
+EMBEDDINGMDL="nomic-embed-text"
+# BIGGER MODELS
+#model = Ollama(model="deepseek-coder:33b")
+#
+#QUERYLLM ="deepseek-r1:32b-qwen-distill-q4_K_M"
+#QUERYLLM="qwen2.5-coder:14b"
+#QUERYLLM="qwen2.5-coder:7b"
+QUERYLLM="qwen2.5-coder:3b"
+#QUERYLLM="zephyr"
+#QUERYLLM="codellama:7b-instruct"
+OLLAMA_HOST = "http://192.168.1.51:11434"

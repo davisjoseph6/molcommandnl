@@ -1,0 +1,123 @@
+# 1. Text Formatting - Context Variants
+- utterance: "Make the text look formal"
+  sub_samples:
+    - program: |
+        text = select_text()
+        format_text(textRanges=text, fontName="Times New Roman", size=18, italic=true)
+      entities: ["text"]
+      context: null
+    - program: |
+        title = select_text(scope="Presentation", name="Title")
+        format_text(textRanges=title, fontName="Georgia", size=24, color="#2A2A2A")
+      entities: ["text"]
+      context: '{"slides": [{"shapes": [{"name": "Title", "textRange": {"_type": "textRange"}}]}]}'
+
+# 2. Image Insertion - Slide Position Awareness
+- utterance: "Insert a picture of a cat"
+  sub_samples:
+    - program: insert_images(description="A cat")
+      entities: ["image"]
+      context: null
+    - program: |
+        slide = select_slides(index=0)
+        insert_images(slides=slide, description="A cat")
+      entities: ["image", "slide"]
+      context: '{"slides": [{"index": 0, "layout": "Title"}]}'
+
+# 3. Title Manipulation - With Context Constraints
+- utterance: "Change the title to 'Quarterly Report'"
+  sub_samples:
+    - program: |
+        title = select_text(name="Title")
+        format_text(textRanges=title, text="Quarterly Report")
+      entities: ["text"]
+      context: '{"slides": [{"shapes": [{"name": "Title", "_type": "shape"}]}]}'
+    - program: |
+        slide = select_slides(layout="Title")
+        insert_text(slides=slide, text="Quarterly Report", name="Title")
+      entities: ["text", "slide"]
+      context: '{"slides": [{"layout": "Title", "shapes": []}]}'
+
+# 4. Context-Sensitive Deletion
+- utterance: "Remove all images"
+  sub_samples:
+    - program: |
+        images = select_shapes(shapeType="Image")
+        delete_shapes(shapes=images)
+      entities: ["image"]
+      context: null
+    - program: |
+        slide = select_slides(index=0)
+        images = select_shapes(scope=slide, shapeType="Image")
+        delete_shapes(shapes=images)
+      entities: ["image", "slide"]
+      context: '{"slides": [{"index": 0, "shapes": [{"type": "Image"}]}]}'
+
+# 5. Layout-Sensitive Operations (New)
+- utterance: "Add a section header"
+  sub_samples:
+    - program: |
+        slide = insert_slides(layout="Section Header")
+        insert_text(slides=slide, text="New Section", style="Heading")
+      entities: ["slide", "text"]
+      context: '{"slides": [{"layout": "Title and Content"}]}'
+    - program: |
+        insert_text(text="Section: ", style="Heading")
+      entities: ["text"]
+      context: '{"slides": [{"layout": "Section Header"}]}'
+
+- utterance: "Add text to slide"
+  sub_samples:
+    - program: "insert_text(scope=slide)"  # When slide has textbox
+      context:
+        slides:
+          - has_textbox: true
+      entities: ["slide", "text"]
+    - program: "insert_shape(type='textbox'); insert_text(scope=shape)"  # When no textbox
+      context:
+        slides:
+          - has_textbox: false
+      entities: ["slide", "text", "shape"]
+
+### NEW
+- utterance: "Insert chart on slide 2"
+  entities: ["shape", "slide"]
+  context:
+    slides:
+      - index: 1
+        layout: "Content"
+  program: |
+    slide = select_slides(index=1)
+    insert_shapes(slides=slide, shapeType="Chart")
+
+- utterance: "Insert a picture of a cat into the slide"
+  entities: ["image", "slide"]
+  context: null
+  program: |
+    slide = select_slides()
+    insert_images(slides=slide, description="A cat")
+
+- utterance: "Add a title 'Quarterly Report' on the first slide"
+  entities: ["text", "slide"]
+  context:
+    slides:
+      - index: 0
+        name: "Title Slide"
+        shapes: []
+  program: |
+    slide = select_slides(index=0)
+    insert_text(precededBy=slide, text="Quarterly Report")
+
+- utterance: "Highlight all headings in blue"
+  entities: ["text"]
+  context: null
+  program: |
+    headings = select_text(scope="Presentation", style="Heading")
+    format_text(textRanges=headings, color="#0000FF")
+
+- utterance: "Remove all images from this slide"
+  entities: ["image", "slide"]
+  context: null
+  program: |
+    images = select_shapes(scope="Selection", shapeType="Image")
+    delete_shapes(shapes=images)

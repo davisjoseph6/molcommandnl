@@ -1,0 +1,70 @@
+@startuml
+!theme blueprint
+skinparam componentStyle rectangle
+title Semantic Interpreter Approach
+
+' Define the layout to be left-to-right (optional)    
+' left to right direction
+
+' Input section
+rectangle "Input" {
+' Déclaration des deux composants comme rectangles simples
+rectangle "NL Utterance\n----------------------\ne.g., Load\nPDB ID\n3EAM" as NLU
+rectangle "Scene\nContext" as DC
+
+' Double flèche entre les deux, avec annotation "+"
+NLU <-> DC : if\nrelevant,\nadd to\nutterance
+}
+
+' Semantic Interpreter section
+rectangle "Semantic Interpreter" {
+
+  ' Analysis Method section
+  rectangle "Prompt Construction\n(Analysis-Retrieval Method)\n<i><font color="#555555">select relevant DSL samples, syntax\n<i><font color="#555555">description, and rules" as AnalysisMethod {
+    component "Entity\nClassifier" as EntityClassifier
+    component "Requires\nContext\nClassifier" as ContextClassifier
+    component "Semantic\nRAG\nSearch" as SemanticSearch
+    component "Construct DSL\nSynthesis\nPrompt" as ConstructPrompt
+    
+    EntityClassifier -> ContextClassifier
+    ContextClassifier -> SemanticSearch
+    SemanticSearch -> ConstructPrompt
+  }
+
+  ' Program Synthesis section
+  rectangle "DSL Program Synthesis" as ProgramSynthesis {
+    component "Call\nLLM" as CallLLM
+    component "Code\nSnippet" as Code
+    CallLLM -> Code
+  }
+  
+  ' Sample Bank
+  database "DSL\nSample\nBank" as SampleBank
+  
+  ' DSL Interpreter section
+  rectangle "DSL Interpreter" as Interpreter {
+    component "Parser\n(DSL→AST)" as Parser
+    component "Program\nValidation" as Validation
+    component "Automatic\nCode\ncorrection" as Correction
+    component "Transpilation\n(DSL→Native\nApp APIs)" as Transpilation
+    component "Execution" as Execution
+    
+    Parser -> Validation
+    Validation -> Correction
+    Correction -> Transpilation
+    Transpilation -> Execution
+  }
+  
+  ' Internal connections
+  ConstructPrompt --> CallLLM
+  Code -> Parser
+  SampleBank -> AnalysisMethod
+}
+
+' Result section
+component "Result" as Result
+
+' Main flow connections
+Input --> EntityClassifier
+Execution -> Result
+@enduml

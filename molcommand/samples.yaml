@@ -1,0 +1,19 @@
+# LOADING GILES
+- utterance: "Load a protein from the PDB with ID 3eam"
+  sub_samples:
+    - program: |
+        add_structure(PDBID="3eam")
+      entities: ["structure"]
+      context: null
+- utterance: "Load a structure from file 'myfile.pdb'"
+  sub_samples:
+    - program: |
+        add_structure(filePath="myfile.pdb")
+      entities: ["structure"]
+      context: null
+- utterance: "Delete structure with name '3eam'"
+  sub_samples:
+    - program: |
+        delete_structure(structureName="3eam")
+      entities: ["structure"]
+      context: null

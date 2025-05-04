@@ -1,0 +1,27 @@
+# ODSL Scope Validation Rules (Minimal Version) based on Entity Hierarchy Schema (for PowerPoint)
+
+# Default scopes for select_* statements when none is provided
+# Injects defaults when scope is missing.
+scope_defaults:
+  select_slides: "Presentation"       # Default: all slides in deck
+  select_shapes: "Selection"          # Default: user's current selection
+  select_text: "Selection"            # Default: selected text
+
+# Valid scope targets for each entity (derived from hierarchy)
+# Enforces hierarchy rules during validation.
+valid_scopes:
+  slide: [presentation, slide]        # Can scope from presentation or slide
+  shapes: [presentation, slide, shape] # Can scope from presentation/slide/shape
+  textRange: [presentation, slide, shape, textRange, text]       # Can scope from parent shape or textRange
+  text: [presentation, slide, shape, textRange, text]       # Can scope from parent shape or textRange
+
+# Special scope keywords (treated as wildcards)
+# Bypasses validation
+special_scopes: ["Presentation", "Selection"]
+
+# New: Contextual selection rules (metadata keys)
+contextual_scopes:
+  # Format: "entity_type": ["allowed_metadata_keys"]
+  slide: ["name", "title", "layout"]  # e.g., select_slides(name="Title")
+  shape: ["name", "type"]            # e.g., select_shapes(type="TextBox")
+  text: ["style", "language"]        # e.g., select_text(style="Heading")
