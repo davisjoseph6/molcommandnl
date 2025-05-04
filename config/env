@@ -1,10 +1,10 @@
 # Makefile
 # MacOS Marc:
-# APYTHON="/opt/homebrew/anaconda3/bin/python3"
+APYTHON="/opt/homebrew/anaconda3/bin/python3"
 # Linux
 # . /gnu/store/yijllyy3hk032jq161sqnc719vlvsfcm-conda-22.9.0/etc/profile.d/conda.sh
 # conda activate molcommand
-APYTHON="/home/baaden/.conda/envs/molcommand/bin/python3"
+# APYTHON="/home/baaden/.conda/envs/molcommand/bin/python3"
 POPULATESCRIPT="script/prepare_sample_store.py"
 CHROMAPATH="/opt/data/RAG/chroma/"
 CHATSCRIPT="script/chat_cli.py"
@@ -33,7 +33,7 @@ EMBEDDINGMDL="nomic-embed-text"
 #QUERYLLM ="deepseek-r1:32b-qwen-distill-q4_K_M"
 QUERYLLM="qwen2.5-coder:14b"
 #QUERYLLM="qwen2.5-coder:7b"
-QUERYLLM="qwen2.5-coder:3b"
+#QUERYLLM="qwen2.5-coder:3b"
 #QUERYLLM="zephyr"
 #QUERYLLM="codellama:7b-instruct"
 #OLLAMA_HOST = "http://192.168.1.51:11434"
