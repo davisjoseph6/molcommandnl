@@ -72,10 +72,14 @@ Data and configuration:
 
 *** =markdown/=
 Very simple, minimalistic DSL example, but it works already!
-- =samples.yaml= five samples for our ChromaDB
+
+Scripts:
 - =dsl_definition.py= this is where much of the magic happens to translate do DSL/AST
 - =markdown_transpile.py= this translates AST to proper Markdown
-  
+
+Data and configuration:
+- =samples.yaml= five samples for our ChromaDB
+    
 *** =molcommand/=
 
 Scripts:
