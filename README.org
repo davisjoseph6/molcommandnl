@@ -10,8 +10,8 @@
 - =env= : tried as much as possible to take out hard-coded options
   from the scripts and centrally put in this file. This includes the
   names of key scripts, where the proper python environment is found,
-  what the subdirectory paths are for the available DSLs and for all
-  LLM setups
+  where the ChromaDB is set up, what the subdirectory paths are for
+  the available DSLs and for all LLM setups
   
 ** =script/=
 
@@ -51,8 +51,61 @@ Helpers:
 
 ** Domain specific language (DSL)-related subdirectories
 *** =odsl/=
+This is derived from the original examples described in the Microsoft
+paper. I modularized the configurable inputs as much as reasonable.
+
+Scripts:
+- =dsl_definition.py= core user intent to DSL/AST translation
+- =office_transpile.py= this translates AST to Offices' Javascript API
+
+Data and configuration:
+- =system_prompt_entity_context.txt= system prompt to classify
+  entities and decide if we require context
+- =user_prompt_entity_context.txt= user prompt to classify entities
+  and decide if we require context
+- =rules.yaml= rules for the DSL language
+- =syntax.yaml= syntax for the DSL language
+- =hierarchy.yaml= hierarchy and important properties of the entities
+  used in the DSL
+- =samples.yaml= samples for ChromaDB
+- =example-context.json= a sample context to test ideas from the paper
+
 *** =markdown/=
+Very simple, minimalistic DSL example, but it works already!
+- =samples.yaml= five samples for our ChromaDB
+- =dsl_definition.py= this is where much of the magic happens to translate do DSL/AST
+- =markdown_transpile.py= this translates AST to proper Markdown
+  
 *** =molcommand/=
+
+Scripts:
+- =dsl_definition.py= core user intent to DSL/AST translation
+- =llmprompt_transpile.py= this translates DSL into whatever is
+  defined by the prompt using LLMs, either Ollama or OpenAI or Claude
+- =pymol_transpile.py= this translates DSL to PyMol commands using a
+  fine-tuned LLM from the ChatMol people
+- =unitymol_transpile.py= this translates AST to UnityMol syntax with
+  an explicitlyu implemented logic for each command/case. Precise but
+  requires a lot of work.
+- =unitymol2_transpile.py= this translates AST to UnityMol syntax
+  using an approach based on templates that might be easier to
+  implement.
+- =unitymol2_pattern_lib.py= this provides patterns that can be used
+  in the templates to verify certain (complex) conditions
+
+Data and configuration:
+- =system_prompt_entity_context.txt= system prompt to classify
+  entities and decide if we require context
+- =user_prompt_entity_context.txt= user prompt to classify entities
+  and decide if we require context
+- =rules.yaml= rules for the DSL language
+- =syntax.yaml= syntax for the DSL language
+- =hierarchy.yaml= hierarchy and important properties of the entities
+  used in the DSL
+- =samples.yaml= samples for ChromaDB
+- =example-context.json= a sample context to test ideas from the paper
+- =unitymol2_templates.yaml= templates for the unitymol2 transpiler
+  based on templates
 
 ** =doc/=
 Not much there yet, except for a few uml schemes that were useful in
