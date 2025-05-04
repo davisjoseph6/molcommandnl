@@ -38,15 +38,40 @@ test:
 	$(info info:: testing symantic interpreter)
 	@ $(APYTHON) $(TESTSCRIPT)
 
-test-llmclient:
-	$(info )
-	$(info info:: testing LLM client class)
-	@ $(APYTHON) $(LLMCLIENT)
+# test-llmclient:
+# 	$(info )
+# 	$(info info:: testing LLM client class)
+# 	@ $(APYTHON) $(LLMCLIENT)
 
-test-interpreter:
+# test-interpreter:
+# 	$(info )
+# 	$(info info:: testing LLM client class)
+# 	@ $(APYTHON) $(SEMINTERP)
+
+# Mapping of keywords to their corresponding scripts
+TEST_SCRIPTS = \
+	llmclient=$(LLMCLIENT) \
+	interpreter=$(SEMINTERP) \
+	tokenizer=scripts/test_tokenizer.py \
+	parser=scripts/test_parser.py \
+	renderer=scripts/test_renderer.py \
+	# Add more as needed
+
+# Extract script path for a given test
+get-script = $(word 2, $(filter $1=%, $(TEST_SCRIPTS)))
+
+# Pattern rule for all test-<keyword> targets
+test-%:
 	$(info )
-	$(info info:: testing LLM client class)
-	@ $(APYTHON) $(SEMINTERP)
+	$(info info:: testing $*)
+	echo $(APYTHON) $(call get-script,$*)
+
+# Convenience alias to show available tests
+.PHONY: list-tests
+list-tests:
+	@echo "Available tests:"
+	@echo "$(TEST_SCRIPTS)" | tr ' ' '\n' | cut -d= -f1
+
 
 init:
 	$(info )
