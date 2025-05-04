@@ -162,3 +162,8 @@ To get a list of all tests do =make list-tests=.
 - =make test-unitymol= runs the original UnityMol transpiler test from =molcommand/unitymol_transpile.py=
 - =make test-unitymol2= runs the new template-based implementation of
   a UnityMol transpiler test from =molcommand/unitymol2_transpile.py=
+- =make test-pymol= takes a DSL snippet and sends it to the fine-tuned
+  LLM of the ChatMol people that's available on the web for testing
+- =make test-llmprompt= sends a prompt with instructions and a DSL
+  snippet to an LLM (Ollama, OpenAI or Claude - the latter two require
+  an API key) for transpilation. To be experimented with.
