@@ -84,18 +84,18 @@ Data and configuration:
 
 Scripts:
 - =dsl_definition.py= core user intent to DSL/AST translation
-- =llmprompt_transpile.py= this translates DSL into whatever is
-  defined by the prompt using LLMs, either Ollama or OpenAI or Claude
-- =pymol_transpile.py= this translates DSL to PyMol commands using a
-  fine-tuned LLM from the ChatMol people
 - =unitymol_transpile.py= this translates AST to UnityMol syntax with
   an explicitlyu implemented logic for each command/case. Precise but
   requires a lot of work.
 - =unitymol2_transpile.py= this translates AST to UnityMol syntax
   using an approach based on templates that might be easier to
   implement.
-- =unitymol2_pattern_lib.py= this provides patterns that can be used
-  in the templates to verify certain (complex) conditions
+  - =unitymol2_pattern_lib.py= this provides patterns that can be used
+    in the templates to verify certain (complex) conditions
+- =pymol_transpile.py= this translates DSL to PyMol commands using a
+  fine-tuned LLM from the ChatMol people
+- =llmprompt_transpile.py= this translates DSL into whatever is
+  defined by the prompt using LLMs, either Ollama or OpenAI or Claude
 
 Data and configuration:
 - =system_prompt_entity_context.txt= system prompt to classify
