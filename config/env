@@ -1,5 +1,8 @@
 # Makefile
+# MacOS Marc:
 APYTHON="/opt/homebrew/anaconda3/bin/python3"
+# Linux
+# APYTHON="/home/baaden/.conda/envs/molcommand/bin/python3"
 POPULATESCRIPT="script/prepare_sample_store.py"
 CHROMAPATH="/opt/data/RAG/chroma/"
 CHATSCRIPT="script/chat_cli.py"
