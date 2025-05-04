@@ -1,12 +1,18 @@
 # Makefile
 APYTHON="/opt/homebrew/anaconda3/bin/python3"
-TESTSCRIPT="script/example-usage.py"
-CHATSCRIPT="script/chat_cli.py"
 POPULATESCRIPT="script/prepare_sample_store.py"
-LLMCLIENT="script/llm_client.py"
-SEMINTERP="script/semantic_interpreter.py"
 CHROMAPATH="/opt/data/RAG/chroma/"
+CHATSCRIPT="script/chat_cli.py"
+TESTSCRIPT="script/example-usage.py"
 CONFIGPATH = "./config"
+# Mapping test keywords to script paths
+test_llmclient="script/llm_client.py"
+test_interpreter="script/semantic_interpreter.py"
+test_odsl="odsl/office_transpile.py"
+test_markdown="markdown/markdown_transpile.py"
+test_unitymol="molcommand/unitymol_transpile.py"
+test_unitymol2="molcommand/unitymol2_transpile.py"
+# Add more as needed...
 
 # DSL
 markdown = "./markdown/"
@@ -19,9 +25,9 @@ EMBEDDINGMDL="nomic-embed-text"
 #model = Ollama(model="deepseek-coder:33b")
 #
 #QUERYLLM ="deepseek-r1:32b-qwen-distill-q4_K_M"
-#QUERYLLM="qwen2.5-coder:14b"
+QUERYLLM="qwen2.5-coder:14b"
 #QUERYLLM="qwen2.5-coder:7b"
-QUERYLLM="qwen2.5-coder:3b"
+#QUERYLLM="qwen2.5-coder:3b"
 #QUERYLLM="zephyr"
 #QUERYLLM="codellama:7b-instruct"
-OLLAMA_HOST = "http://192.168.1.51:11434"
+#OLLAMA_HOST = "http://192.168.1.51:11434"

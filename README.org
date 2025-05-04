@@ -121,3 +121,44 @@ A few generic code stubs that can be useful in the future.
   abstract syntax tree (AST) code to final target commands.
 - =basic_dsl_transpiler_class.py= is a basic skeleton for transpiling
   a synthesized DSL program directly (for instance with an LLM)
+* Using MolCommandNL
+Use =make= to get a git status and view of the directory.
+
+** ChromaDB sample store
+- to take a =samples.yaml= file and initialize the corresponding
+  ChromaDB store with it, use =make init=
+- to add more samples when the files has been edited, use =make
+  populate=
+
+** Querying MolCommandNL
+- =make test= will run queries for each of the three defined DSL:
+  office, markdown and molcommand. What is run is defined at the end
+  of =script/example-usage.py= and can be commented/decommented as
+  well as extended. How good this works depends also on the choice of
+  the LLM. I recommend ~qwen2.5-coder:14b~, which has been behaving
+  quite nicely so far.
+- =make chats= is a simple chat client, where all three DSL
+  definitions are loaded, a very simple test on the input tries to
+  determine which one to call and then provides the output. This
+  allows interactive testing.
+- =make chat= provides a somewhat nicer interface, but does the same
+  job as ~chats~
+
+** Individually testing implementations
+I tried to implement a =main()= for most of the classes for some basic
+tests and illustration of what they can do and how they work. These
+are mostly intended to be run directly from your IDE,
+uncommenting/modifying lines as you wish. But some can also be run via
+make, which will call the uncommented test codes.
+
+To get a list of all tests do =make list-tests=.
+
+- =make test-interpreter= will run current test on
+  =script/semantic_interpreter.py=
+- =make test-llmclient= runs a few sample LLM queries to make sure all
+  is properly set up in =script/llm_client.py=
+- =make test-odsl= runs the OfficeDSL transpiler
+- =make test-markdown= runs the Markdown transpiler
+- =make test-unitymol= runs the original UnityMol transpiler test from =molcommand/unitymol_transpile.py=
+- =make test-unitymol2= runs the new template-based implementation of
+  a UnityMol transpiler test from =molcommand/unitymol2_transpile.py=

@@ -1,13 +1,14 @@
 # INCLUDE COMMON SETTINGS
 include config/env
 
-.PHONY: info
+.PHONY: info list-tests
 
 info:
 	clear
 	@printf "\ninfo:: Semantic interpreter approach\n\n"
 	@printf "info:: common targets: init, populate, chat, chats, test\n"
-	@printf "info::                 test-llmclient, test-interpreter\n"
+	@printf "info::                 test-llmclient, test-interpreter, ..\n"
+	@printf "info::                 list-tests\n"
 	@/bin/ls -GF
 	@printf "\n"
 	@git status
@@ -38,39 +39,17 @@ test:
 	$(info info:: testing symantic interpreter)
 	@ $(APYTHON) $(TESTSCRIPT)
 
-# test-llmclient:
-# 	$(info )
-# 	$(info info:: testing LLM client class)
-# 	@ $(APYTHON) $(LLMCLIENT)
-
-# test-interpreter:
-# 	$(info )
-# 	$(info info:: testing LLM client class)
-# 	@ $(APYTHON) $(SEMINTERP)
-
-# Mapping of keywords to their corresponding scripts
-TEST_SCRIPTS = \
-	llmclient=$(LLMCLIENT) \
-	interpreter=$(SEMINTERP) \
-	tokenizer=scripts/test_tokenizer.py \
-	parser=scripts/test_parser.py \
-	renderer=scripts/test_renderer.py \
-	# Add more as needed
-
-# Extract script path for a given test
-get-script = $(word 2, $(filter $1=%, $(TEST_SCRIPTS)))
-
-# Pattern rule for all test-<keyword> targets
+# Pattern rule using indirect variable reference
 test-%:
 	$(info )
 	$(info info:: testing $*)
-	echo $(APYTHON) $(call get-script,$*)
+	@$(APYTHON) $($(subst -,_,$@))
 
-# Convenience alias to show available tests
-.PHONY: list-tests
+# List all available test targets
 list-tests:
-	@echo "Available tests:"
-	@echo "$(TEST_SCRIPTS)" | tr ' ' '\n' | cut -d= -f1
+	$(info )
+	$(info info:: Available test targets:)
+	@grep '^test_' config/env | cut -d= -f1 | sed 's/^test_//'
 
 
 init:

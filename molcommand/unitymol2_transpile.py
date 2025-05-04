@@ -4,9 +4,12 @@ from jinja2 import Template
 from pathlib import Path
 from unitymol2_pattern_lib import PatternLib
 
+from pathlib import Path
+script_dir = Path(__file__).resolve().parent
+
 
 class Transpiler:
-    def __init__(self, template_file: str = "unitymol2_templates.yaml"):
+    def __init__(self, template_file: str = script_dir / "unitymol2_templates.yaml"):
         self.debug_enabled = False
         self.pattern_lib = PatternLib(self)  # Pass self reference
         self.templates = self._load_templates(template_file)
