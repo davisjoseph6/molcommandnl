@@ -6,7 +6,7 @@ APYTHON="/opt/homebrew/anaconda3/bin/python3"
 # conda activate molcommand
 # APYTHON="/home/baaden/.conda/envs/molcommand/bin/python3"
 POPULATESCRIPT="script/prepare_sample_store.py"
-CHROMAPATH="/opt/data/RAG/chroma/"
+CHROMAPATH="/home/joseph/rag/chroma/"
 CHATSCRIPT="script/chat_cli.py"
 TESTSCRIPT="script/example-usage.py"
 CONFIGPATH = "./config"

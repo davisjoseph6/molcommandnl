@@ -213,7 +213,10 @@ class SampleBank:
                         sample_id
                     ))
                     seen_samples.add(sample_id)
-                    log.tmp += f"  retained sample for entity {i} : {entity_results["distances"][i]} distance score\n       "
+                    log.tmp += (
+                            f"  retained sample for entity {i} : "
+                            f"{entity_results['distances'][i]} distance score\n       "
+                            )
                     break
 
         # Continue if we do not have enough matches yet

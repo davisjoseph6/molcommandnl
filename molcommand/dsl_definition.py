@@ -182,7 +182,7 @@ class DSL(DSLInterface):
             if keyword in text:
                 for term in related_terms:
                     if term not in text:
-                        text += f" {text}"
+                        text += f" {term}"
 
         text = text.lower()
         text = text.translate(str.maketrans('', '', string.punctuation))
@@ -387,7 +387,7 @@ class DSL(DSLInterface):
 
         if setDefaultFlag:
             default_scope = self._hierarchy_schema["scope_defaults"].get(node["stmt"], "Selection")
-            print(f"[INFO] : normalized scope for '{node["stmt"]}' to default {default_scope}")
+            print(f"[INFO] : normalized scope for '{node['stmt']}' to default {default_scope}")
             node["args"]["scope"] = default_scope
             scope_entity = default_scope
 
