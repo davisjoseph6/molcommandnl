@@ -1,0 +1,25 @@
+schema: molcommand-sample-bank
+schema_version: 1
+verb: add_structure
+items:
+  - id: add-pdb-3eam
+    utterance: "Load a protein from the PDB with ID 3eam"
+    dsl: 'add_structure(PDBID="3eam")'
+    entities: ["structure"]
+    context: null
+    tags: ["pdb", "load"]
+
+  - id: add-pdb-1kx2
+    utterance: "Load PDB ID 1kx2"
+    dsl: 'add_structure(PDBID="1kx2")'
+    entities: ["structure"]
+    context: null
+    tags: ["pdb", "load"]
+
+  - id: add-file-generic
+    utterance: "Load a structure from file 'myfile.pdb'"
+    dsl: 'add_structure(filePath="myfile.pdb")'
+    entities: ["structure"]
+    context: null
+    tags: ["file", "load"]
+

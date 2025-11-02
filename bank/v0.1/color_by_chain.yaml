@@ -1,0 +1,11 @@
+schema: molcommand-sample-bank
+schema_version: 1
+verb: color_by_chain
+items:
+  - id: color-by-chain-cartoon
+    utterance: "Color the cartoon by chain"
+    dsl: 'color_by_chain(sel="all_1kx2", target="cartoon")'
+    entities: ["representation"]
+    context: null
+    tags: ["color", "chain"]
+

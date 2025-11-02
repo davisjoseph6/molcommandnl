@@ -1,19 +1,54 @@
-# LOADING GILES
-- utterance: "Load a protein from the PDB with ID 3eam"
+- utterance: Color the cartoon by chain
   sub_samples:
-    - program: |
-        add_structure(PDBID="3eam")
-      entities: ["structure"]
-      context: null
-- utterance: "Load a structure from file 'myfile.pdb'"
+  - program: color_by_chain(sel="all_1kx2", target="cartoon")
+    entities:
+    - representation
+    context: null
+- utterance: Hide 1kx2
   sub_samples:
-    - program: |
-        add_structure(filePath="myfile.pdb")
-      entities: ["structure"]
-      context: null
-- utterance: "Delete structure with name '3eam'"
+  - program: hide(sel="all_1kx2")
+    entities:
+    - representation
+    context: null
+- utterance: Load a protein from the PDB with ID 3eam
   sub_samples:
-    - program: |
-        delete_structure(structureName="3eam")
-      entities: ["structure"]
-      context: null
+  - program: add_structure(PDBID="3eam")
+    entities:
+    - structure
+    context: null
+- utterance: Load a structure from file 'myfile.pdb'
+  sub_samples:
+  - program: add_structure(filePath="myfile.pdb")
+    entities:
+    - structure
+    context: null
+- utterance: Load PDB ID 1kx2
+  sub_samples:
+  - program: add_structure(PDBID="1kx2")
+    entities:
+    - structure
+    context: null
+- utterance: Select all atoms from 1kx2
+  sub_samples:
+  - program: select(query="all_1kx2", name="all_1kx2")
+    entities:
+    - selection
+    context: null
+- utterance: Select protein for 1kx2
+  sub_samples:
+  - program: select(query="1kx2_protein_or_nucleic", name="prot")
+    entities:
+    - selection
+    context: null
+- utterance: Show 1kx2 as cartoon
+  sub_samples:
+  - program: show(sel="all_1kx2", rep="cartoon")
+    entities:
+    - representation
+    context: null
+- utterance: Show the protein selection in cartoon
+  sub_samples:
+  - program: show(sel="prot", rep="cartoon")
+    entities:
+    - representation
+    context: null

@@ -1,0 +1,18 @@
+schema: molcommand-sample-bank
+schema_version: 1
+verb: show
+items:
+  - id: show-cartoon-all-1kx2
+    utterance: "Show 1kx2 as cartoon"
+    dsl: 'show(sel="all_1kx2", rep="cartoon")'
+    entities: ["representation"]
+    context: null
+    tags: ["show", "cartoon"]
+
+  - id: show-cartoon-prot
+    utterance: "Show the protein selection in cartoon"
+    dsl: 'show(sel="prot", rep="cartoon")'
+    entities: ["representation"]
+    context: null
+    tags: ["show", "cartoon"]
+

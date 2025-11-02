@@ -1,0 +1,18 @@
+schema: molcommand-sample-bank
+schema_version: 1
+verb: select
+items:
+  - id: sel-all-1kx2
+    utterance: "Select all atoms from 1kx2"
+    dsl: 'select(query="all_1kx2", name="all_1kx2")'
+    entities: ["selection"]
+    context: null
+    tags: ["select", "preset"]
+
+  - id: sel-protein-1kx2
+    utterance: "Select protein for 1kx2"
+    dsl: 'select(query="1kx2_protein_or_nucleic", name="prot")'
+    entities: ["selection"]
+    context: null
+    tags: ["select", "protein"]
+
