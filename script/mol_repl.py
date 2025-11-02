@@ -1,34 +1,139 @@
 #!/usr/bin/env python3
-import os, sys, asyncio, re, json
-sys.path.append(os.path.dirname(__file__))              # semantic_interpreter
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))  # project root
+import os, sys, asyncio, json, argparse, re
+from importlib import import_module
 
+HERE = os.path.dirname(__file__)
+ROOT = os.path.abspath(os.path.join(HERE, ".."))
+sys.path.append(HERE)   # semantic_interpreter.py
+sys.path.append(ROOT)   # repo root
+
+# --- interpreter + LLM shim ---
 from semantic_interpreter import SemanticInterpreter, LLMClient
-# use your FastMCP tools from unitymol_copilot
+
+# --- unitymol_copilot tools (validate/execute) ---
 sys.path.append(os.path.expanduser('~/unitymol_copilot'))
 from mcp_server import validate_dsl, execute_dsl
 
-def cleaned(line: str) -> str:
-    # extract the cleaned DSL line exactly like example-usage did
-    return line.strip()
 
-async def main():
-    si = SemanticInterpreter(LLMClient())   # config picks local RAG/bank first
-    print("molREPL — type natural language, 'quit' to exit.")
+def load_mol_dsl():
+    """
+    Load your molcommand DSL object/factory from molcommand/dsl_definition.py.
+    Tries several common names so we’re robust to refactors.
+    """
+    mod = import_module('molcommand.dsl_definition')
+    for name in ('build_dsl', 'make_dsl', 'create_dsl', 'load_dsl',
+                 'MolCommandDSL', 'DSL', 'dsl'):
+        if hasattr(mod, name):
+            obj = getattr(mod, name)
+            return obj() if callable(obj) else obj
+    raise RuntimeError("No DSL factory found in molcommand/dsl_definition.py")
+
+
+def cleaned(s: str) -> str:
+    return (s or "").strip()
+
+
+async def run_repl(entity_hint=None, with_context=False):
+    # Only for operator visibility; SemanticInterpreter picks the actual path.
+    chroma_dir = (
+        os.environ.get("MOLCOMMANDNL_CHROMA_DIR")
+        or os.environ.get("CHROMA_PATH")
+        or os.path.expanduser("~/.cache/molcommandnl/chroma")
+    )
+    os.environ.setdefault("CHROMADB_TELEMETRY", "0")
+
+    print("molREPL — type natural language; 'quit' to exit.")
+    print(f"[chroma] {chroma_dir}")
+    if entity_hint:
+        print(f"[hint] default entity: {entity_hint}")
+    if with_context:
+        print("[hint] using example context")
+
+    dsl_spec = load_mol_dsl()
+    si = SemanticInterpreter(dsl_spec, LLMClient())
+
+    context = {"id": "scene1", "_type": "unitymol_scene"} if with_context else None
+
+    # Prefer selecting by concrete object id once we know it
+    id_map: dict[str, str] = {}
+
+    def prefer_object_id(dsl_text: str) -> str:
+        # replace select(name:XXXX) or select("name:XXXX") with select(id:OBJID) if known
+        def _r_id_unquoted(m):
+            code = m.group(1).lower()
+            obj = id_map.get(code)
+            return f'select(id:{obj})' if obj else m.group(0)
+        def _r_id_quoted(m):
+            code = m.group(1).lower()
+            obj = id_map.get(code)
+            return f'select(id:{obj})' if obj else m.group(0)
+        dsl_text = re.sub(r'select\(name:([0-9A-Za-z]{4})\)', _r_id_unquoted, dsl_text)
+        dsl_text = re.sub(r'select\("name:([0-9A-Za-z]{4})"\)', _r_id_quoted, dsl_text)
+        return dsl_text
+
     while True:
-        q = input("NL> ").strip()
+        try:
+            q = input("NL> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
         if q.lower() in ("quit", "exit"):
             break
-        resp = si.interpret(q, entity_hint=None, context=None)
-        dsl = cleaned(resp.cleaned_program)
-        print("DSL>", dsl)
-        v = await validate_dsl(dsl)
+        if not q:
+            continue
+
+        # NL → DSL
+        interp = si.interpret(q, entity_hint=entity_hint, context=context)
+
+        # Prefer CLEANED DSL, fall back if needed
+        dsl_prog = cleaned(
+            getattr(interp, "cleaned_program", "")
+            or interp.get("cleaned_dsl", "")
+            or interp.get("dsl", "")
+        )
+
+        # Last resort: rebuild from AST
+        if not dsl_prog and interp.get("ast"):
+            try:
+                dsl_prog = cleaned(si.parser.unparse(interp["ast"]))
+            except Exception:
+                dsl_prog = ""
+
+        if not dsl_prog:
+            print("No DSL produced.")
+            continue
+
+        # Prefer selecting by concrete object id when possible
+        dsl_prog = prefer_object_id(dsl_prog)
+
+        print("DSL>", dsl_prog)
+
+        v = await validate_dsl(dsl_prog)
         if not v.get("ok"):
             print("Validator errors:", v.get("errors"))
             continue
-        out = await execute_dsl(dsl)
+
+        out = await execute_dsl(dsl_prog)
         print(json.dumps(out, indent=2))
 
+        # Memoize last created object id for the PDB code used in add_structure
+        m_pdb = re.search(r'add_structure\(\s*PDBID\s*=\s*"([0-9A-Za-z]{4})"\s*\)', dsl_prog)
+        if m_pdb and isinstance(out, dict):
+            obj = out.get("result")
+            if isinstance(obj, str):
+                id_map[m_pdb.group(1).lower()] = obj
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--entity", default=None,
+                    help="Optional entity hint (e.g. 'structure').")
+    ap.add_argument("--with-context", action="store_true",
+                    help="Use a tiny demo context object.")
+    args = ap.parse_args()
+    asyncio.run(run_repl(entity_hint=args.entity, with_context=args.with_context))
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
 

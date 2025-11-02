@@ -1,16 +1,21 @@
-# Makefile
-# MacOS Marc:
-APYTHON="/opt/homebrew/anaconda3/bin/python3"
-# Linux
-# . /gnu/store/yijllyy3hk032jq161sqnc719vlvsfcm-conda-22.9.0/etc/profile.d/conda.sh
-# conda activate molcommand
-# APYTHON="/home/baaden/.conda/envs/molcommand/bin/python3"
+# molcommandnl/config/env  (parsed by utils.load_config)
+
+# Python to run molcommand scripts (your venv)
+APYTHON="/home/joseph/molcommandnl/.venv/bin/python3"
+
+# Scripts
 POPULATESCRIPT="script/prepare_sample_store.py"
-CHROMAPATH="/home/joseph/rag/chroma/"
 CHATSCRIPT="script/chat_cli.py"
 TESTSCRIPT="script/example-usage.py"
-CONFIGPATH = "./config"
-# Mapping test keywords to script paths
+CONFIGPATH="./config"
+
+# Optional: keep base for legacy code paths (ignored when override below is set)
+CHROMAPATH="/home/joseph/.cache"
+
+# Hard override used by our DSL to pick the exact Chroma dir
+MOLCOMMANDNL_CHROMA_DIR="/home/joseph/.cache/molcommandnl/chroma"
+
+# Test mappings
 test_llmclient="script/llm_client.py"
 test_interpreter="script/semantic_interpreter.py"
 test_odsl="odsl/office_transpile.py"
@@ -20,20 +25,17 @@ test_unitymol2="molcommand/unitymol2_transpile.py"
 test_pymol="molcommand/pymol_transpile.py"
 test_llmprompt="molcommand/llmprompt_transpile.py"
 
-# DSL
-markdown = "./markdown/"
-odsl = "./odsl/"
-molcommand = "./molcommand/"
+# DSL dirs
+markdown="./markdown/"
+odsl="./odsl/"
+molcommand="./molcommand/"
 
 # Language Model Settings
 EMBEDDINGMDL="nomic-embed-text"
-# BIGGER MODELS
-#model = Ollama(model="deepseek-coder:33b")
-#
-#QUERYLLM ="deepseek-r1:32b-qwen-distill-q4_K_M"
 QUERYLLM="qwen2.5-coder:14b"
-#QUERYLLM="qwen2.5-coder:7b"
-#QUERYLLM="qwen2.5-coder:3b"
-#QUERYLLM="zephyr"
-#QUERYLLM="codellama:7b-instruct"
-#OLLAMA_HOST = "http://192.168.1.51:11434"
+
+# Integration w/ unitymol_copilot
+UNITYMOL_COPILOT_DIR="/home/joseph/unitymol_copilot"
+# Nice to pass through to subprocesses (telemetry off)
+CHROMADB_TELEMETRY="0"
+

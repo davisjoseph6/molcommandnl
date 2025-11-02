@@ -5,13 +5,11 @@ import io
 import string
 from typing import List, Dict, Any, Optional
 from dsl_interface import DSLInterface
-from utils import load_config, load_text_file, load_yaml_file
+from utils import load_config, load_yaml_file
 from llm_client import load_prompt
 import json
 import inspect
-import sys
 
-from pathlib import Path
 
 class DSL(DSLInterface):
     """Implementation of DSL interface for MolCommandNL automation DSL"""
@@ -20,153 +18,103 @@ class DSL(DSLInterface):
         """Initialize the MolCommandNL DSL with configs and rules"""
         self.debug_enabled = False
 
-        # Get the absolute path to the script
         script_dir = os.path.dirname(os.path.abspath(__file__))
-
-        # Load the configuration from the config/env file
         config = load_config(script_dir + '/../config/env')
 
-        # Use the configuration in your script
-        self.CONFIG_PATH = config.get('CONFIGPATH')
-        self.CHROMA_PATH = config.get('CHROMAPATH') + '/molcommand/'
+        # Effective Chroma dir
+        env_override = os.environ.get("MOLCOMMANDNL_CHROMA_DIR")
+        if env_override:
+            self.CHROMA_PATH = env_override
+        else:
+            cfg_base = (config.get('CHROMAPATH') or os.path.expanduser("~/.cache"))
+            self.CHROMA_PATH = os.path.join(cfg_base, "molcommand")
 
-        # Load syntax, rules and entity context
-
+        # Load syntax, rules, prompts, hierarchy
         syntax_path = script_dir + "/syntax.yaml"
         rules_path = script_dir + "/rules.yaml"
         hierarchy_path = script_dir + "/hierarchy.yaml"
         entity_ctx_path = script_dir
-        # Load the files
+
         self._syntax = load_yaml_file(syntax_path)
         self._rules = load_yaml_file(rules_path)
         self._hierarchy_schema = load_yaml_file(hierarchy_path)
         self._sysprompt_entity_context, self._usrprompt_entity_context = load_prompt("entity_context", entity_ctx_path)
 
+    # --------------------------
+    # Prompt scaffolding helpers
+    # --------------------------
     def extract_key_terms_as_string(self, query: str) -> str:
-        """Extract important keywords from the query and return them as a space-separated string."""
         stop_words = {
-            # "and", "or", "the", "to", "a", "an", "in", "with", "by", "of", "for",
-            # "is", "are", "can", "how", "what", "when", "where", "which", "who", "why"
             "the", "a", "an", "it", "with", "by", "for", "this", "there",
             "is", "are", "can", "how", "what", "when", "where", "which", "who", "why"
         }
         words = query.lower().split()
-        keywords = [word for word in words if word not in stop_words and len(word) > 1]
+        keywords = [w for w in words if w not in stop_words and len(w) > 1]
         return " ".join(keywords)
 
     def get_syntax(self, entities: List[str]) -> str:
-        """Assemble relevant syntax statements for prompt"""
-        # Initialize an empty list to hold the formatted sections
         parts = []
-
-        # Add a title for the Global Items section (if any global items exist)
         parts.append("### Global Syntax")
-        # Loop through all statement categories to find global items (those with no entity matching)
-        for statement_type, statements in self._syntax.items():
-            if statement_type == "global_syntax":  # Assuming "global_items" is a special section
-                for entry in statements:
-                    if isinstance(entry, dict):
-                        parts.append("- " + entry["text"])  # Add global item text
-
-        # Add a section title for Select Statements
-        parts.append("\n### Select Statements")
-        # add syntax for matching entities
-        for entry in self._syntax.get('select_statements', []):
+        for entry in self._syntax.get("global_syntax", []):
             if isinstance(entry, dict):
-                if any(entity in entry["entities"] for entity in entities):
-                    parts.append(entry["text"])  # Add the matching select statement
+                parts.append("- " + entry["text"])
 
-        # Add a section title for Add Statements
+        parts.append("\n### Select Statements")
+        for entry in self._syntax.get('select_statements', []):
+            if isinstance(entry, dict) and any(e in entry["entities"] for e in entities):
+                parts.append(entry["text"])
+
         parts.append("\n### Add Statements")
         for entry in self._syntax.get('add_statements', []):
-            if isinstance(entry, dict):
-                if any(entity in entry["entities"] for entity in entities):
-                    parts.append(entry["text"])  # Add the matching add statement
+            if isinstance(entry, dict) and any(e in entry["entities"] for e in entities):
+                parts.append(entry["text"])
 
-        # Add a section title for Update Statements
         parts.append("\n### Update Statements")
         for entry in self._syntax.get('update_statements', []):
-            if isinstance(entry, dict):
-                if any(entity in entry["entities"] for entity in entities):
-                    parts.append(entry["text"])  # Add the matching update statement
+            if isinstance(entry, dict) and any(e in entry["entities"] for e in entities):
+                parts.append(entry["text"])
 
-        # Add a section title for Delete Statements
         parts.append("\n### Delete Statements")
         for entry in self._syntax.get('delete_statements', []):
-            if isinstance(entry, dict):
-                if any(entity in entry["entities"] for entity in entities):
-                    parts.append(entry["text"])  # Add the matching delete statement
-        parts.append("\n")  # Add a newline after delete statements
+            if isinstance(entry, dict) and any(e in entry["entities"] for e in entities):
+                parts.append(entry["text"])
 
-        # Combine all the parts into a single string and return it
+        parts.append("\n")
         return "\n".join(parts)
 
     def get_rules(self, entities: List[str]) -> str:
-        """Construct rules to be added to the prompt"""
-        # Initialize an empty list to hold the formatted sections
         parts = []
-
-        # Loop through all statement categories to find global items (those with no entity matching)
-        for statement_type, statements in self._rules.items():
-            if statement_type == "global_rules":  # Assuming "global_items" is a special section
-                for entry in statements:
-                    if isinstance(entry, dict):
-                        parts.append("- " + entry["text"])  # Add global item text
-
-        # Loop through all entity-related rules and match entities
-        for entry in self._rules.get('entity_rules', []):
+        for entry in self._rules.get("global_rules", []):
             if isinstance(entry, dict):
-                if any(entity in entry["entities"] for entity in entities):
-                    parts.append("- " + entry["text"])  # Add the matching select statement
-
-        # Combine all the parts into a single string and return it
+                parts.append("- " + entry["text"])
+        for entry in self._rules.get('entity_rules', []):
+            if isinstance(entry, dict) and any(e in entry["entities"] for e in entities):
+                parts.append("- " + entry["text"])
         return "\n".join(parts)
 
     def get_sysprompt_entity_context(self) -> str:
-        """Return the currently stored system prompt for the LLM"""
         return self._sysprompt_entity_context
 
     def get_usrprompt_entity_context(self) -> str:
-        """Return the currently stored user prompt for the LLM"""
         return self._usrprompt_entity_context
 
     def normalize_text(self, query_text: str) -> str:
-        """
-        Normalize input text to improve matching.
-        Lowercase, remove punctuation, unify synonyms.
-        Preprocess the user query to focus on command intent.
-        Remove fluff and standardize common terms.
-        """
         if self.debug_enabled:
             print(f"[SUB-DGB] Normalizing : {query_text}")
-        # Convert to lowercase for better matching
         text = query_text.lower()
 
-        # Replace common phrases with standardized versions
         replacements = {
-            "how do i": "",
-            "how to": "",
-            "i want to": "",
-            "can you tell me how to": "",
-            "can you": "",
-            "please": "",
-            "show me how to": "",
-            "what is the command for": "",
-            "what is the syntax for": "",
-            "command to": "",
-            "code for": "",
+            "how do i": "", "how to": "", "i want to": "", "can you tell me how to": "",
+            "can you": "", "please": "", "show me how to": "",
+            "what is the command for": "", "what is the syntax for": "",
+            "command to": "", "code for": "",
         }
+        for p, r in replacements.items():
+            text = text.replace(p, r)
 
-        for phrase, replacement in replacements.items():
-            text = text.replace(phrase, replacement)
-
-        # Focus on key terms
         text = self.extract_key_terms_as_string(text)
 
-        # Remove extra whitespace
         text = " ".join(text.split())
-
-        # Add specific keywords for better retrieval if missing
         keyword_mappings = {
             "color": ["colorby", "coloring"],
             "select": ["selection"],
@@ -177,14 +125,12 @@ class DSL(DSLInterface):
             "rotate": ["rotation", "movement"],
             "annotate": ["annotation", "measure"],
         }
+        for kw, rel in keyword_mappings.items():
+            if kw in text:
+                for t in rel:
+                    if t not in text:
+                        text += f" {t}"
 
-        for keyword, related_terms in keyword_mappings.items():
-            if keyword in text:
-                for term in related_terms:
-                    if term not in text:
-                        text += f" {term}"
-
-        text = text.lower()
         text = text.translate(str.maketrans('', '', string.punctuation))
         text = re.sub(r"\b(create|insert|add|generate|load|fetch)\b", "add", text)
         text = re.sub(r"\b(red|blue|green|teal|olive)\b", "color", text)
@@ -193,29 +139,39 @@ class DSL(DSLInterface):
 
         if self.debug_enabled:
             print(f"[SUB-DGB]               {text}")
-
         return text.strip()
 
+    # --------------------------
+    # Canonicalization helpers
+    # --------------------------
     def get_statement_aliases(self) -> Dict[str, str]:
-        """Maps alias statement names to canonical DSL function names"""
+        """Maps alias statement names to canonical DSL function names."""
         return {
-            'add_picture': 'add_images',
-            'delete_image': 'delete_shapes'
+            # Office aliases (existing)
+            'add_picture':      'add_images',
+            'delete_image':     'delete_shapes',
+
+            # MolCommandNL friendly forms → canonical validator verbs
+            'select_structure': 'select',
+            'hide_all':         'hide',
+            'show_as_cartoon':  'update_representation',
+            'show_cartoon':     'update_representation',
+            'color_chains':     'update_coloring',
+            'colour_chains':    'update_coloring',
         }
 
     def get_valid_enums(self) -> Dict[str, List[str]]:
-        """Valid enumerated values for specific parameters"""
         return {
             'underline': ['None', 'Single', 'Double', 'Wavy'],
             'horizontalAlignment': ['Left', 'Center', 'Right']
         }
 
-    # --- Context-related methods ---
+    # --------------------------
+    # Context pruning (kept)
+    # --------------------------
     def prune_context_tree(self, tree: dict, entity_types: list[str]) -> dict:
-        """Only retain relevant tree parts for given entity types"""
         if self.debug_enabled:
             print(f"[SUB-DGB] in function {inspect.currentframe().f_code.co_name}")
-            # If context is needed, we obtain it
             print(f"[SUB-DBG] Original Context is: {tree}")
 
         if not isinstance(tree, dict):
@@ -223,16 +179,13 @@ class DSL(DSLInterface):
                 print(f"[SUB-DGB] Attention: context is not an instance of tree!")
             return None
 
-        # Based on the entity types, we expand for context tree pruning
         entity_types = self._expand_entity_types_for_context(entity_types)
 
-        # If current node matches target type, return it
         if tree.get('_type') in entity_types:
             if self.debug_enabled:
                 print(f"[SUB-DGB] We matched entity type {tree.get('_type')}!")
             return tree
 
-        # Special handling for slides array
         if 'slides' in tree:
             pruned_slides = []
             for slide in tree['slides']:
@@ -242,10 +195,7 @@ class DSL(DSLInterface):
             if pruned_slides:
                 return {'slides': pruned_slides}
             return None
-        elif self.debug_enabled:
-            print(f"[SUB-DGB] slides not in tree")
 
-        # Special handling for shapes array
         if 'shapes' in tree:
             pruned_shapes = []
             for shape in tree['shapes']:
@@ -253,13 +203,9 @@ class DSL(DSLInterface):
                 if pruned_shape:
                     pruned_shapes.append(pruned_shape)
             if pruned_shapes:
-                # Only include the shapes array if we found matches
                 return {'shapes': pruned_shapes}
             return None
-        elif self.debug_enabled:
-            print(f"[SUB-DGB] shapes not in tree")
 
-        # For other nodes, recursively prune while preserving structure
         pruned = {}
         for key, value in tree.items():
             if isinstance(value, dict):
@@ -272,19 +218,13 @@ class DSL(DSLInterface):
                 if pruned_list:
                     pruned[key] = pruned_list
             else:
-                # Only preserve non-structural properties if we're keeping this node
                 if any(self._node_contains_entity(child, entity_types)
                        for child in tree.values() if isinstance(child, (dict, list))):
                     pruned[key] = value
 
-        # If we have pruned the current node, return the pruned versiony
-        if self.debug_enabled:
-            print(f"[SUB-DGB] Pruning done with result {pruned}")
-
         return pruned if pruned else None
 
     def _expand_entity_types_for_context(self, entity_types):
-        """Expand entity types to include related entities for context pruning"""
         expanded_types = set(entity_types)
         for entity in entity_types:
             children = self._hierarchy_schema["valid_scopes"].get(entity, [])
@@ -292,7 +232,6 @@ class DSL(DSLInterface):
         return list(expanded_types)
 
     def _node_contains_entity(self, node, entity_types):
-        """Helper to check if a node or its children contain target entities"""
         if isinstance(node, dict):
             if node.get('_type') in entity_types:
                 return True
@@ -301,80 +240,69 @@ class DSL(DSLInterface):
             return any(self._node_contains_entity(item, entity_types) for item in node)
         return False
 
-        # --- Used by semantic_interpreter.py only ---
-
+    # --------------------------
+    # LLM output → DSL extraction
+    # --------------------------
     def extract_dsl_lines(self, raw: str) -> List[str]:
         """
-        Extracts valid, complete DSL instruction lines from raw LLM output.
-        Handles both single-line and multi-line DSL statements.
+        Extract valid DSL instruction lines from raw LLM output.
+        Capture both canonical verbs and friendly shorthands.
         """
-        lines = []  # Collected valid DSL lines
-        buffer = ''  # Temporary buffer to accumulate multi-line statements
-        inside_statement = False  # Flag to track whether we're inside a multi-line DSL statement
+        lines, buffer, inside = [], '', False
 
-        for line in io.StringIO(raw):  # Iterate over each line of LLM output
-            stripped = line.strip()  # Trim leading/trailing whitespace
-
-            # Skip empty lines
+        for line in io.StringIO(raw or ""):
+            stripped = line.strip()
             if not stripped:
                 continue
 
-            # Detect start of a DSL statement: optional var assignment + DSL function + (
-            if re.match(r"^\s*(\w+\s*=)?\s*(select_|add_|update_|delete_)\w*\(", stripped):
+            # Accept select / select_* / add / update / delete / hide / show / color_*
+            if re.match(
+                r'^\s*(\w+\s*=)?\s*((?:select|add|update|delete|hide|show)(?:_\w+)?|color_\w+)\s*\(',
+                stripped
+            ):
                 buffer = stripped
-                inside_statement = True
-
-                # If the statement is already complete (ends with `)`), flush it immediately
+                inside = True
                 if stripped.endswith(')'):
                     lines.append(buffer)
                     buffer = ''
-                    inside_statement = False
-
-            # If we're inside a statement, keep appending lines until we close it
-            elif inside_statement:
-                buffer += ' ' + stripped  # Continue building the statement
+                    inside = False
+            elif inside:
+                buffer += ' ' + stripped
                 if stripped.endswith(')'):
                     lines.append(buffer)
                     buffer = ''
-                    inside_statement = False
-
-            # Not a valid DSL line, and not inside a statement → ignore it
+                    inside = False
             else:
                 print(f"[INFO] ⚠️ Ignoring non-DSL line: {stripped}")
 
-        # If a statement was opened but not closed, warn and drop the buffer
         if buffer:
             print(f"[INFO] ⚠️ Incomplete DSL line left open: {buffer}")
-
         return lines
 
+    # --------------------------
+    # Scope validation (Office side kept)
+    # --------------------------
     def validate_scope(self, node: Dict[str, Any]) -> Dict[str, Any]:
-        """Perform scope validation for select_* statements"""
+        """Perform scope validation for select_* statements (Office DSL)."""
         if not node["stmt"].startswith("select_"):
             return node
 
-        target_entity = node["stmt"].split("_")[1]  # "text" from "select_text"
+        target_entity = node["stmt"].split("_")[1]
         args = node["args"]
 
-        # Case 1: Metadata-based selection (e.g., select_slides(name="Title"))
         if "scope" not in args and any(
                 k in self._hierarchy_schema["contextual_scopes"].get(target_entity, []) for k in args):
-            return node  # Bypass hierarchy checks for contextual queries
+            return node
 
-        # Case 2: Standard scope validation
         scope_entity = args.get("scope")
         setDefaultFlag = False
 
-        # Add this synonyms check before hierarchy validation
         if scope_entity == "document":
-            scope_entity = "Scene"  # Treat as special scope
-            node["args"]["scope"] = "Scene"  # Update the AST
+            scope_entity = "Scene"
+            node["args"]["scope"] = "Scene"
 
-        # 1. Inject default scope if missing
         if scope_entity is None:
             setDefaultFlag = True
-
-        # 2. Ensure scope is a string (not a number/variable)
         else:
             try:
                 if not isinstance(scope_entity, str):
@@ -391,15 +319,12 @@ class DSL(DSLInterface):
             node["args"]["scope"] = default_scope
             scope_entity = default_scope
 
-        # 3. Skip further validation for special scopes ("Scene", "Selection")
         if scope_entity in self._hierarchy_schema["special_scopes"]:
             return node
 
-        # 4. Normalize scope_entity (e.g., "shape" → "shapes" if pluralization matters)
         normalized_scope = scope_entity.rstrip("s") if scope_entity.endswith("s") else scope_entity
         valid_parents = self._hierarchy_schema["valid_scopes"][target_entity]
 
-        # 5. Check hierarchy validity (with pluralization support)
         try:
             if scope_entity not in valid_parents and normalized_scope not in valid_parents:
                 raise ValueError(
@@ -412,25 +337,128 @@ class DSL(DSLInterface):
 
         return node
 
+    # --------------------------
+    # Post-parse corrections
+    # --------------------------
     def additional_corrections(self, node: Dict[str, Any]) -> Dict[str, Any]:
-        """Apply MolCommand-specific corrections to AST nodes"""
-        # Step 3: Clamp numerical values (like transparency) to valid range [0.0, 1.0]
+        """
+        MolCommand-specific corrections to AST nodes.
+        - Normalize friendly verbs to canonical args.
+        - Argument synonym cleanup.
+        - Heuristic mapping for PDB IDs.
+        - Clamp numeric [0,1] where relevant.
+        """
+        stmt = node.get('stmt', '')
+        args = node.setdefault('args', {})
+
+        # Common arg synonyms
+        if 'selection' in args and 'sel' not in args:
+            args['sel'] = args.pop('selection')
+        if 'path' in args and 'filePath' not in args:
+            args['filePath'] = args.pop('path')
+        if 'file' in args and 'filePath' not in args:
+            args['filePath'] = args.pop('file')
+
+        # Friendly → canonical argument shapes
+        if stmt == 'select':
+            name = args.pop('name', None) or args.pop('PDBID', None) or args.pop('id', None)
+            if name is not None:
+                node['args'] = {'name': name}
+
+        elif stmt == 'hide':
+            if not args:
+                args['scope'] = 'all'
+
+        elif stmt == 'update_representation':
+            args.setdefault('type', 'cartoon')
+
+        elif stmt == 'update_coloring':
+            args.setdefault('method', 'chain')
+
+        # Heuristic: 4-char "name" as PDB ID
+        if stmt == 'add_structure':
+            if 'name' in args and 'PDBID' not in args:
+                val = str(args['name']).strip().lower()
+                if re.fullmatch(r'[0-9a-z]{4}', val):
+                    args['PDBID'] = args.pop('name')
+            for k in ('pdb', 'pdbid'):
+                if k in args and 'PDBID' not in args:
+                    args['PDBID'] = args.pop(k)
+
+        # Clamp Office numeric fields
         for key in ('fillTransparency', 'lineTransparency'):
-            if key in node['args'] and isinstance(node['args'][key], (int, float)):
-                # Prevent invalid values outside expected range
-                node['args'][key] = max(0.0, min(1.0, node['args'][key]))
+            if key in args and isinstance(args[key], (int, float)):
+                args[key] = max(0.0, min(1.0, args[key]))
+
+        node['args'] = args
         return node
 
+    # --------------------------
+    # Chroma collection name
+    # --------------------------
     def get_collection_name(self) -> str:
-        """Return the name of the ChromaDB collection for this DSL"""
         return "molcommand_samples"
 
     def set_debug(self, dbg: bool) -> None:
-        """
-        Enable/disable debugging.
-        
-        Args:
-            dbg: The boolean status to set for debug_enabled
-        """
         print(">>> DEBUGGING FOR OFFICE DSL TOGGLED <<<")
         self.debug_enabled = dbg
+
+    # ---------- Final text-level adapter for the validator grammar ----------
+    def postprocess_for_validator(self, dsl_text: str, utterance: Optional[str] = None) -> str:
+        """
+        Final rewrite to match UnityMol validator grammar:
+
+          select(name:1kx2)     # unquoted QUERY token
+          select(id:1kx2_8)
+          select(last)          # if empty and no PDB inferred
+
+          hide_all()            # hide everything (not hide(all))
+
+          update_representation(cartoon)
+          update_coloring(chain)
+        """
+        text = dsl_text or ""
+
+        # --- SELECT → unquoted QUERY token ---
+        # select("id:OBJ") / select("name:CODE") → select(id:OBJ) / select(name:CODE)
+        text = re.sub(r'select\(\s*"id:([^"]+)"\s*\)',   r'select(id:\1)',   text)
+        text = re.sub(r'select\(\s*"name:([^"]+)"\s*\)', r'select(name:\1)', text)
+
+        # select(name="X") / select(PDBID="X") / select(name("X"))
+        text = re.sub(r'select\(\s*name\s*=\s*["\']([^"\']+)["\']\s*\)',  r'select(name:\1)', text)
+        text = re.sub(r'select\(\s*PDBID\s*=\s*["\']([^"\']+)["\']\s*\)', r'select(name:\1)', text)
+        text = re.sub(r'select\(\s*name\(\s*["\']([^"\']+)["\']\s*\)\s*\)', r'select(name:\1)', text)
+
+        # select("name:X") already handled; keep select(name:X) as-is
+        text = re.sub(r'select\(\s*name\s*:\s*([A-Za-z0-9_-]+)\s*\)', r'select(name:\1)', text)
+
+        # select() → infer or last
+        def _fill_select_empty(_m):
+            candidate = None
+            if utterance:
+                m_pdb = re.search(r'\b([0-9][A-Za-z0-9]{3})\b', utterance)
+                if m_pdb:
+                    candidate = m_pdb.group(1)
+            return f'select(name:{candidate})' if candidate else 'select(last)'
+        text = re.sub(r'\bselect\(\s*\)', _fill_select_empty, text)
+
+        # --- HIDE everything → hide_all() ---
+        text = re.sub(r'hide\(\s*scope\s*=\s*["\']all["\']\s*\)', 'hide_all()', text)
+        text = re.sub(r'hide\(\s*["\']?all["\']?\s*\)',            'hide_all()', text)
+        text = re.sub(r'hide\(\s*all\(\)\s*\)',                    'hide_all()', text)
+
+        # Ensure hide_all has parentheses
+        text = re.sub(r'\bhide_all\b(?!\s*\()', 'hide_all()', text)
+
+        # --- Representation/Coloring enums as bare tokens ---
+        text = re.sub(r'update_representation\(\s*type\s*=\s*["\']([^"\']+)["\']\s*\)',
+                      r'update_representation(\1)', text)
+        text = re.sub(r'update_representation\(\s*["\']([^"\']+)["\']\s*\)',
+                      r'update_representation(\1)', text)
+        text = re.sub(r'update_coloring\(\s*method\s*=\s*["\']([^"\']+)["\']\s*\)',
+                      r'update_coloring(\1)', text)
+        text = re.sub(r'update_coloring\(\s*["\']([^"\']+)["\']\s*\)',
+                      r'update_coloring(\1)', text)
+
+        return text
+
