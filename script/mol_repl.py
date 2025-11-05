@@ -54,7 +54,7 @@ async def run_repl(entity_hint=None, with_context=False):
 
     context = {"id": "scene1", "_type": "unitymol_scene"} if with_context else None
 
-    # Prefer selecting by concrete object id once we know it
+    # Prefer selecting by concrete object id once we know it (optional via env)
     id_map: dict[str, str] = {}
 
     def prefer_object_id(dsl_text: str) -> str:
@@ -103,8 +103,9 @@ async def run_repl(entity_hint=None, with_context=False):
             print("No DSL produced.")
             continue
 
-        # Prefer selecting by concrete object id when possible
-        dsl_prog = prefer_object_id(dsl_prog)
+        # OPTIONAL: prefer selecting by concrete object id when allowed
+        if os.environ.get("MCL_PREFER_OBJECT_ID") == "1":
+            dsl_prog = prefer_object_id(dsl_prog)
 
         print("DSL>", dsl_prog)
 
@@ -127,7 +128,7 @@ async def run_repl(entity_hint=None, with_context=False):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--entity", default=None,
-                    help="Optional entity hint (e.g. 'structure').")
+                    help="Optional entity hint (e.g. 'structure', 'selection', 'representation').")
     ap.add_argument("--with-context", action="store_true",
                     help="Use a tiny demo context object.")
     args = ap.parse_args()

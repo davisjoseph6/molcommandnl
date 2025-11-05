@@ -152,12 +152,17 @@ class DSL(DSLInterface):
             'delete_image':     'delete_shapes',
 
             # MolCommandNL friendly forms → canonical validator verbs
-            'select_structure': 'select',
-            'hide_all':         'hide',
-            'show_as_cartoon':  'update_representation',
-            'show_cartoon':     'update_representation',
-            'color_chains':     'update_coloring',
-            'colour_chains':    'update_coloring',
+            'select_structure':         'select',
+            'select_atoms':             'select',
+            'select_all':               'select',
+            'select_cartoons_by_chain': 'select',           # sometimes produced by LLMs
+            'load_pdb':                 'add_structure',
+            'insert_protein':           'add_structure',
+            'hide_all':                 'hide',
+            'show_as_cartoon':          'update_representation',
+            'show_cartoon':             'update_representation',
+            'color_chains':             'update_coloring',
+            'colour_chains':            'update_coloring',
         }
 
     def get_valid_enums(self) -> Dict[str, List[str]]:
@@ -359,31 +364,52 @@ class DSL(DSLInterface):
         if 'file' in args and 'filePath' not in args:
             args['filePath'] = args.pop('file')
 
-        # Friendly → canonical argument shapes
+        # --- SELECT normalization ---
         if stmt == 'select':
-            name = args.pop('name', None) or args.pop('PDBID', None) or args.pop('id', None)
-            if name is not None:
-                node['args'] = {'name': name}
+            # Friendly: structureName / pdb / PDB → build standard selection name
+            pdb = args.pop('structureName', None) or args.pop('pdb', None) or args.pop('PDB', None)
+            nm  = args.get('name')
+            # If user passed a 4-char code, convert to all_<code>
+            code = None
+            if isinstance(pdb, str) and re.fullmatch(r'[0-9a-zA-Z]{4}', pdb.strip()):
+                code = pdb.strip().lower()
+            elif isinstance(nm, str) and re.fullmatch(r'[0-9a-zA-Z]{4}', nm.strip()):
+                code = nm.strip().lower()
 
+            if code:
+                args['query'] = args.get('query') or f"all_{code}"
+                args['name']  = args.get('name')  or f"all_{code}"
+            else:
+                # If user provided name but no query, mirror it as query
+                if isinstance(nm, str) and 'query' not in args:
+                    args['query'] = nm
+
+            # Remove unsupported keys (validator doesn't accept id:… form)
+            args.pop('id', None)
+
+        # --- HIDE normalization ---
         elif stmt == 'hide':
+            # keep as hide(scope="all") → later optionally mapped to hide_all()
             if not args:
                 args['scope'] = 'all'
 
+        # --- Representation & coloring defaults ---
         elif stmt == 'update_representation':
+            # Keep named arg; postprocess may convert to enum-only positional
             args.setdefault('type', 'cartoon')
 
         elif stmt == 'update_coloring':
             args.setdefault('method', 'chain')
 
-        # Heuristic: 4-char "name" as PDB ID
+        # --- ADD_STRUCTURE normalization ---
         if stmt == 'add_structure':
-            if 'name' in args and 'PDBID' not in args:
-                val = str(args['name']).strip().lower()
-                if re.fullmatch(r'[0-9a-z]{4}', val):
-                    args['PDBID'] = args.pop('name')
-            for k in ('pdb', 'pdbid'):
+            # name/pdb/pdbid/id → PDBID if 4-char
+            for k in ('name', 'pdb', 'pdbid', 'PDB', 'id'):
                 if k in args and 'PDBID' not in args:
-                    args['PDBID'] = args.pop(k)
+                    val = str(args[k]).strip()
+                    if re.fullmatch(r'[0-9a-zA-Z]{4}', val):
+                        args['PDBID'] = args.pop(k)
+                        break
 
         # Clamp Office numeric fields
         for key in ('fillTransparency', 'lineTransparency'):
@@ -406,51 +432,42 @@ class DSL(DSLInterface):
     # ---------- Final text-level adapter for the validator grammar ----------
     def postprocess_for_validator(self, dsl_text: str, utterance: Optional[str] = None) -> str:
         """
-        Final rewrite to match UnityMol validator grammar:
+        Final rewrite to match UnityMol validator grammar where safe.
 
-          select(name:1kx2)     # unquoted QUERY token
-          select(id:1kx2_8)
-          select(last)          # if empty and no PDB inferred
-
-          hide_all()            # hide everything (not hide(all))
-
-          update_representation(cartoon)
-          update_coloring(chain)
+        IMPORTANT:
+        - By default we DO NOT rewrite select(...) into colon tokens (name: / id:)
+          because the validator in your environment expects a QUERY or named args.
+          You can re-enable the colon-style rewrite by setting:
+              export MCL_ENABLE_COLON_SELECT=1
         """
         text = dsl_text or ""
 
-        # --- SELECT → unquoted QUERY token ---
-        # select("id:OBJ") / select("name:CODE") → select(id:OBJ) / select(name:CODE)
-        text = re.sub(r'select\(\s*"id:([^"]+)"\s*\)',   r'select(id:\1)',   text)
-        text = re.sub(r'select\(\s*"name:([^"]+)"\s*\)', r'select(name:\1)', text)
+        # --- SELECT colon-style rewrite (disabled by default) ---
+        if os.environ.get("MCL_ENABLE_COLON_SELECT", "0") == "1":
+            # select("id:OBJ") / select("name:CODE") → select(id:OBJ) / select(name:CODE)
+            text = re.sub(r'select\(\s*"id:([^"]+)"\s*\)',   r'select(id:\1)',   text)
+            text = re.sub(r'select\(\s*"name:([^"]+)"\s*\)', r'select(name:\1)', text)
+            # select(name="X") / select(PDBID="X")
+            text = re.sub(r'select\(\s*name\s*=\s*["\']([^"\']+)["\']\s*\)',  r'select(name:\1)', text)
+            text = re.sub(r'select\(\s*PDBID\s*=\s*["\']([^"\']+)["\']\s*\)', r'select(name:\1)', text)
+            text = re.sub(r'select\(\s*name\(\s*["\']([^"\']+)["\']\s*\)\s*\)', r'select(name:\1)', text)
+            text = re.sub(r'select\(\s*name\s*:\s*([A-Za-z0-9_-]+)\s*\)', r'select(name:\1)', text)
+            # select() → infer or last
+            def _fill_select_empty(_m):
+                candidate = None
+                if utterance:
+                    m_pdb = re.search(r'\b([0-9][A-Za-z0-9]{3})\b', utterance)
+                    if m_pdb:
+                        candidate = m_pdb.group(1)
+                return f'select(name:{candidate})' if candidate else 'select(last)'
+            text = re.sub(r'\bselect\(\s*\)', _fill_select_empty, text)
 
-        # select(name="X") / select(PDBID="X") / select(name("X"))
-        text = re.sub(r'select\(\s*name\s*=\s*["\']([^"\']+)["\']\s*\)',  r'select(name:\1)', text)
-        text = re.sub(r'select\(\s*PDBID\s*=\s*["\']([^"\']+)["\']\s*\)', r'select(name:\1)', text)
-        text = re.sub(r'select\(\s*name\(\s*["\']([^"\']+)["\']\s*\)\s*\)', r'select(name:\1)', text)
-
-        # select("name:X") already handled; keep select(name:X) as-is
-        text = re.sub(r'select\(\s*name\s*:\s*([A-Za-z0-9_-]+)\s*\)', r'select(name:\1)', text)
-
-        # select() → infer or last
-        def _fill_select_empty(_m):
-            candidate = None
-            if utterance:
-                m_pdb = re.search(r'\b([0-9][A-Za-z0-9]{3})\b', utterance)
-                if m_pdb:
-                    candidate = m_pdb.group(1)
-            return f'select(name:{candidate})' if candidate else 'select(last)'
-        text = re.sub(r'\bselect\(\s*\)', _fill_select_empty, text)
-
-        # --- HIDE everything → hide_all() ---
+        # --- HIDE everything → hide_all() (kept; safe) ---
         text = re.sub(r'hide\(\s*scope\s*=\s*["\']all["\']\s*\)', 'hide_all()', text)
         text = re.sub(r'hide\(\s*["\']?all["\']?\s*\)',            'hide_all()', text)
-        text = re.sub(r'hide\(\s*all\(\)\s*\)',                    'hide_all()', text)
-
-        # Ensure hide_all has parentheses
         text = re.sub(r'\bhide_all\b(?!\s*\()', 'hide_all()', text)
 
-        # --- Representation/Coloring enums as bare tokens ---
+        # --- Representation/Coloring enums as bare tokens (kept; safe) ---
         text = re.sub(r'update_representation\(\s*type\s*=\s*["\']([^"\']+)["\']\s*\)',
                       r'update_representation(\1)', text)
         text = re.sub(r'update_representation\(\s*["\']([^"\']+)["\']\s*\)',

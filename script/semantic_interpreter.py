@@ -106,6 +106,15 @@ class EntityContextClassifier:
         entities = [e.strip().strip('"\'') for e in (cats.group(1).split(',') if cats else []) if e.strip()]
         requires_context = ctx.group(1).lower() == "true" if ctx else False
 
+        # Heuristics: nudge entity coverage based on wording
+        ut = (utterance or "").lower()
+        if "select" in ut and "selection" not in entities:
+            entities.append("selection")
+        if any(w in ut for w in ("show", "cartoon", "color", "colour", "hide")) and "representation" not in entities:
+            entities.append("representation")
+        if any(w in ut for w in ("pdb", "protein", "structure", "load", "insert", "fetch", "add")) and "structure" not in entities:
+            entities.append("structure")
+
         for ent in entities:
             log.info(f"Entity assigned: {ent}")
         log.info(f"It is {requires_context} that we require context.")
@@ -492,7 +501,7 @@ class CodeCorrector:
             # DSL-specific corrections
             node = self.dsl.additional_corrections(node)
 
-            # scope validation
+            # scope validation (only for select_* office-style)
             node = self.dsl.validate_scope(node)
             if node is None:
                 print("[INFO] Command was ignored after verification of command scopes.")
@@ -549,7 +558,7 @@ class SemanticInterpreter:
         corrected_ast = self.corrector.correct(ast)
         cleaned = self.parser.unparse(corrected_ast)
 
-        # NEW: final adapter for the validator grammar (positional args, defaults, etc.)
+        # Final adapter for the validator grammar (positional enums, hide_all, etc.)
         if hasattr(self.dsl, "postprocess_for_validator"):
             cleaned = self.dsl.postprocess_for_validator(cleaned, utterance=utterance)
 
