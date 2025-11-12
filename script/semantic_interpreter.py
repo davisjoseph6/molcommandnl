@@ -355,7 +355,7 @@ class PromptConstructor:
                     try: sub_samples = json.loads(sub_samples)
                     except json.JSONDecodeError: sub_samples = []
                 for ss in sub_samples:
-                    usr_parts.append(f"\n# User Instruction: {ex.get('utterance','')}  # score={score:.3f}")
+                    usr_parts.append(f"\n# User Instruction: {ex.get('utterance','')}  # sim={score:.3f}")
                     if ss.get("context"):
                         usr_parts.append(f"# Context: {ss['context']}")
                     usr_parts.append(ss.get("program","").strip())
@@ -500,6 +500,15 @@ class CodeCorrector:
 
             # DSL-specific corrections
             node = self.dsl.additional_corrections(node)
+            if node is None:
+                print("[INFO] Command ignored after DSL corrections.")
+                continue
+            if node is None:
+                print("[INFO] Command ignored after DSL corrections.")
+                continue
+            if node is None:
+                print("[INFO] Command ignored after DSL corrections.")
+                continue
 
             # scope validation (only for select_* office-style)
             node = self.dsl.validate_scope(node)

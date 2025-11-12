@@ -10,9 +10,6 @@ from llm_client import load_prompt
 import json
 import inspect
 
-# ---- New: allow-list for select(...) keys
-ALLOWED_SELECT_KEYS = {"name", "query", "PDBID", "sel", "scope"}
-
 
 class DSL(DSLInterface):
     """Implementation of DSL interface for MolCommandNL automation DSL"""
@@ -283,25 +280,6 @@ class DSL(DSLInterface):
             else:
                 print(f"[INFO] ⚠️ Ignoring non-DSL line: {stripped}")
 
-        # ---- New: filter out invalid select(...) lines (e.g., select(score=...))
-        def _is_valid(line: str) -> bool:
-            m = re.match(r'^\s*(?:\w+\s*=)?\s*(\w+)\s*\((.*)\)\s*$', line)
-            if not m:
-                return False
-            func, argstr = m.group(1), m.group(2)
-            if func != 'select':
-                return True
-            if 'score=' in argstr:
-                return False
-            # If key=value pairs are present, all keys must be allowed
-            if '=' in argstr:
-                keys = [k.strip() for k in re.findall(r'(\w+)\s*=', argstr)]
-                return all(k in ALLOWED_SELECT_KEYS for k in keys)
-            # Bare positional token is fine (e.g., select(all_1kx2))
-            return True
-
-        lines = [l for l in lines if _is_valid(l)]
-
         if buffer:
             print(f"[INFO] ⚠️ Incomplete DSL line left open: {buffer}")
         return lines
@@ -310,12 +288,6 @@ class DSL(DSLInterface):
     # Scope validation (Office side kept)
     # --------------------------
     def validate_scope(self, node: Dict[str, Any]) -> Dict[str, Any]:
-        if not node or not isinstance(node, dict):
-            return node
-        if not node or not isinstance(node, dict):
-            return node
-        if not node or not isinstance(node, dict):
-            return node
         """Perform scope validation for select_* statements (Office DSL)."""
         if not node["stmt"].startswith("select_"):
             return node
@@ -373,7 +345,7 @@ class DSL(DSLInterface):
     # --------------------------
     # Post-parse corrections
     # --------------------------
-    def additional_corrections(self, node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def additional_corrections(self, node: Dict[str, Any]) -> Dict[str, Any]:
         """
         MolCommand-specific corrections to AST nodes.
         - Normalize friendly verbs to canonical args.
@@ -394,12 +366,7 @@ class DSL(DSLInterface):
 
         # --- SELECT normalization ---
         if stmt == 'select':
-            # Drop any select with unknown keys early
-            invalid = [k for k in list(args.keys()) if k not in ALLOWED_SELECT_KEYS]
-            if invalid:
-                print(f"[INFO] Dropping select(...) with invalid keys: {invalid}")
-                return None
-
+            # Friendly: structureName / pdb / PDB → build standard selection name
             pdb = args.pop('structureName', None) or args.pop('pdb', None) or args.pop('PDB', None)
             nm  = args.get('name')
 
@@ -411,12 +378,17 @@ class DSL(DSLInterface):
                 code = nm.strip().lower()
 
             if code:
-                args['query'] = args.get('query') or "all"
-                args['name']  = args.get('name')  or code
+                # Use "all_<code>" as the selection QUERY token (what the validator expects)
+                token = f"all_{code}"
+                # Prefer to carry both name and query with the token value
+                args['query'] = args.get('query') or token
+                args['name']  = args.get('name')  or token
             else:
+                # If user provided a name but no query, default query to "all"
                 if isinstance(nm, str) and 'query' not in args:
                     args['query'] = "all"
 
+            # Remove unsupported keys
             args.pop('id', None)
 
         # --- HIDE normalization ---
@@ -466,29 +438,12 @@ class DSL(DSLInterface):
         IMPORTANT:
         - By default we DO NOT rewrite select(...) into colon tokens (name: / id:)
           because the validator expects a QUERY positional token (e.g., select(all_1kx2)).
-          For robustness here, we normalize all selections to select(TOKEN) where TOKEN
-          comes from env var MCL_SELECT_TOKEN (default: 'last'), and we ensure a prior
-          add_structure(PDBID="CODE") exists if a PDB code was referenced.
+          You can re-enable the colon-style rewrite by setting:
+              export MCL_ENABLE_COLON_SELECT=1
         """
         text = dsl_text or ""
 
-        # --- If select() references a PDB code, ensure we load it first (case-insensitive) ---
-        def _pdb_from_select(t: str):
-            m = re.search(r'select\(\s*"?(?:name:)?([0-9A-Za-z]{4})"?\s*\)', t, re.IGNORECASE)
-            if m: return m.group(1)
-            m = re.search(r'select\(\s*all_([0-9A-Za-z]{4})\s*\)', t, re.IGNORECASE)
-            if m: return m.group(1)
-            m = re.search(r'select\(\s*[^)]*\bname\s*=\s*["\']([0-9A-Za-z]{4})["\']', t, re.IGNORECASE)
-            if m: return m.group(1)
-            m = re.search(r'select\(\s*[^)]*\bPDBID\s*=\s*["\']([0-9A-Za-z]{4})["\']', t, re.IGNORECASE)
-            if m: return m.group(1)
-            return None
-
-        code = _pdb_from_select(text)
-        if code and re.search(rf'add_structure\(\s*PDBID\s*=\s*"{re.escape(code)}"\s*\)', text, re.IGNORECASE) is None:
-            text = f'add_structure(PDBID="{code}")\n' + text
-
-        # --- SELECT named-args → positional QUERY token (still intermediate) ---
+        # --- SELECT named-args → positional QUERY token ---
         def _strip_quotes(s: str) -> str:
             s = s.strip()
             if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
@@ -501,86 +456,68 @@ class DSL(DSLInterface):
             kv = dict((k.strip(), _strip_quotes(v))
                       for k, v in re.findall(r'(\w+)\s*=\s*(".*?"|\'.*?\'|[^,)\s]+)', inside))
 
-            # Helper: detect 4-char code and "all_<code>" (case-insensitive)
+            # Helper: detect 4-char code and "all_<code>"
             def _code_from_name(n: Optional[str]) -> Optional[str]:
                 if not isinstance(n, str):
                     return None
+                # accept either "1kx2" or "all_1kx2"
                 if re.fullmatch(r'[0-9a-zA-Z]{4}', n):
                     return n.lower()
-                m2 = re.fullmatch(r'all_([0-9a-zA-Z]{4})', n, re.IGNORECASE)
+                m2 = re.fullmatch(r'all_([0-9a-zA-Z]{4})', n)
                 if m2:
                     return m2.group(1).lower()
                 return None
 
-            # 1) If query already is all_<code>, use it directly (case-insensitive)
+            # 1) If query already is all_<code>, use it directly
             q = kv.get('query')
-            if isinstance(q, str) and re.fullmatch(r'all_[0-9a-zA-Z]{4}', q, re.IGNORECASE):
+            if isinstance(q, str) and re.fullmatch(r'all_[0-9a-zA-Z]{4}', q):
                 return f"select({q})"
 
             # 2) query == "all" + 4-char name → all_<code>
             if isinstance(q, str) and q.lower() == 'all':
                 code = _code_from_name(kv.get('name')) or _code_from_name(kv.get('PDBID'))
                 if code:
-                    token = ("ALL_" + code.upper()) if os.environ.get("MCL_QUERY_UPPER") == "1" else ("all_" + code)
-                    return f"select({token})"
+                    return f"select(all_{code})"
 
             # 3) Only name or PDBID provided → try to synthesize all_<code>
             code = _code_from_name(kv.get('name')) or _code_from_name(kv.get('PDBID'))
             if code:
-                token = ("ALL_" + code.upper()) if os.environ.get("MCL_QUERY_UPPER") == "1" else ("all_" + code)
-                return f"select({token})"
+                return f"select(all_{code})"
 
-            # 4) Fall back to select(query) for safe tokens
+            # 4) If user already passed a bare query=... that's not all_<code>,
+            # fall back to select(query) if it looks like a valid token-ish string.
             if isinstance(q, str) and re.fullmatch(r'[A-Za-z0-9_:.+-]+', q):
                 return f"select({q})"
 
+            # Otherwise, keep as-is
             return m.group(0)
 
         text = re.sub(r'\bselect\(\s*([^)]+)\)', _select_rewrite, text)
 
-        # --- Normalize any specialized select(...) to a validator token ---
-        sel_token = os.environ.get("MCL_SELECT_TOKEN", "last")
-        # quoted colon form → select(TOKEN)
-        text = re.sub(r'(?i)select\(\s*"name:[^"]+"\s*\)', lambda _: f'select({sel_token})', text)
-        # unquoted colon form → select(TOKEN)
-        text = re.sub(r'(?i)select\(\s*name:[^)]+\)',           lambda _: f'select({sel_token})', text)
-        # all_CODE form → select(TOKEN)
-        text = re.sub(r'(?i)select\(\s*all_[^)]+\)',            lambda _: f'select({sel_token})', text)
-        # Just in case: strip quotes around last/all
-        text = re.sub(r'select\(\s*"(last|all)"\s*\)', r'select(\1)', text)
-
-        # Optional colon-style rewrite (disabled by default; kept for completeness)
+        # --- Optional colon-style rewrite (disabled by default) ---
         if os.environ.get("MCL_ENABLE_COLON_SELECT", "0") == "1":
-            text = re.sub(r'select\(\s*"id:([^"]+)"\s*\)',   r'select("id:\1")',   text)
-            text = re.sub(r'select\(\s*"name:([^"]+)"\s*\)', r'select("name:\1")', text)
-            text = re.sub(r'select\(\s*name\s*=\s*["\']([^"\']+)["\']\s*\)',  r'select("name:\1")', text)
-            text = re.sub(r'select\(\s*PDBID\s*=\s*["\']([^"\']+)["\']\s*\)', r'select("name:\1")', text)
-            text = re.sub(r'select\(\s*name\(\s*["\']([^"\']+)["\']\s*\)\s*\)', r'select("name:\1")', text)
-            text = re.sub(r'select\(\s*name\s*:\s*([A-Za-z0-9_-]+)\s*\)', r'select("name:\1")', text)
+            text = re.sub(r'select\(\s*"id:([^"]+)"\s*\)',   r'select(id:\1)',   text)
+            text = re.sub(r'select\(\s*"name:([^"]+)"\s*\)', r'select(name:\1)', text)
+            text = re.sub(r'select\(\s*name\s*=\s*["\']([^"\']+)["\']\s*\)',  r'select(name:\1)', text)
+            text = re.sub(r'select\(\s*PDBID\s*=\s*["\']([^"\']+)["\']\s*\)', r'select(name:\1)', text)
+            text = re.sub(r'select\(\s*name\(\s*["\']([^"\']+)["\']\s*\)\s*\)', r'select(name:\1)', text)
+            text = re.sub(r'select\(\s*name\s*:\s*([A-Za-z0-9_-]+)\s*\)', r'select(name:\1)', text)
 
             def _fill_select_empty(_m):
-                # Keep empty-select fallback simple and unquoted
-                return 'select(last)'
+                candidate = None
+                if utterance:
+                    m_pdb = re.search(r'\b([0-9][A-Za-z0-9]{3})\b', utterance)
+                    if m_pdb:
+                        candidate = m_pdb.group(1)
+                return f'select(name:{candidate})' if candidate else 'select(last)'
             text = re.sub(r'\bselect\(\s*\)', _fill_select_empty, text)
 
-        # HIDE everything → hide_all()
+        # --- HIDE everything → hide_all() ---
         text = re.sub(r'hide\(\s*scope\s*=\s*["\']all["\']\s*\)', 'hide_all()', text)
         text = re.sub(r'hide\(\s*["\']?all["\']?\s*\)',            'hide_all()', text)
         text = re.sub(r'\bhide_all\b(?!\s*\()', 'hide_all()', text)
 
-
-        # --- After all rewrites: optionally strip select(...) when we've just loaded a PDB ---
-        # If MCL_STRIP_SELECT=1 (default), remove select(...) lines when an add_structure(...) is present.
-        if os.environ.get("MCL_STRIP_SELECT", "1") == "1":
-            lines = [ln for ln in (text.splitlines() or []) if ln.strip()]
-            has_add = any(re.match(r'\s*add_structure\(', ln) for ln in lines)
-            if has_add:
-                # Drop any select(...) lines (case-insensitive) — validator currently rejects them.
-                lines = [ln for ln in lines if not re.match(r'\s*select\s*\(', ln, re.IGNORECASE)]
-                text = "\n".join(lines)
-
-
-        # Representation/Coloring enums as bare tokens
+        # --- Representation/Coloring enums as bare tokens ---
         text = re.sub(r'update_representation\(\s*type\s*=\s*["\']([^"\']+)["\']\s*\)',
                       r'update_representation(\1)', text)
         text = re.sub(r'update_representation\(\s*["\']([^"\']+)["\']\s*\)',

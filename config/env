@@ -32,7 +32,7 @@ molcommand="./molcommand/"
 
 # Language Model Settings
 EMBEDDINGMDL="nomic-embed-text"
-QUERYLLM=qwen2.5:3b-instruct
+QUERYLLM="qwen2.5:3b-instruct"
 
 # Integration w/ unitymol_copilot
 UNITYMOL_COPILOT_DIR="/home/joseph/unitymol_copilot"
