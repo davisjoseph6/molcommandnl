@@ -431,6 +431,21 @@ class DSL(DSLInterface):
         elif stmt == 'update_coloring':
             args.setdefault('method', 'chain')
 
+
+        # --- SHOW/HIDE/COLOR_BY_CHAIN normalization ---
+        # Accept four-letter PDB codes in sel and make them real selection tokens (all_<code>).
+        if stmt in ('show', 'hide', 'color_by_chain'):
+            def _sel_token(v):
+                if isinstance(v, str) and re.fullmatch(r'[0-9A-Za-z]{4}', v):
+                    return 'all_' + v.lower()
+                return v
+            if 'sel' in args:
+                args['sel'] = _sel_token(args['sel'])
+            if stmt == 'show':
+                args.setdefault('rep', 'cartoon')
+            if stmt == 'color_by_chain':
+                args.setdefault('target', 'cartoon')
+    
         # --- ADD_STRUCTURE normalization ---
         if stmt == 'add_structure':
             for k in ('name', 'pdb', 'pdbid', 'PDB', 'id'):
@@ -563,6 +578,22 @@ class DSL(DSLInterface):
                 return 'select(last)'
             text = re.sub(r'\bselect\(\s*\)', _fill_select_empty, text)
 
+
+        # If a call uses sel="XXXX" (4-char PDB code), create a selection first and
+        # rewrite sel to "all_xxxx".
+        def _inject_select_for_show_like(txt: str) -> str:
+            import re as _re
+            def repl(m):
+                func = m.group('func')
+                code = m.group('code').lower()
+                rest = m.group('rest') or ''
+                token = ('ALL_' + code.upper()) if os.environ.get('MCL_QUERY_UPPER') == '1' else ('all_' + code)
+                call = f'{func}(sel="{token}"{rest})'
+                return f'select({token})\n' + call
+            pattern = _re.compile(r'(?P<func>show|hide|color_by_chain)\(\s*sel\s*=\s*"(?P<code>[0-9A-Za-z]{4})"\s*(?P<rest>,[^)]*)?\)', _re.IGNORECASE)
+            return _re.sub(pattern, repl, txt)
+        text = _inject_select_for_show_like(text)
+    
         # HIDE everything → hide_all()
         text = re.sub(r'hide\(\s*scope\s*=\s*["\']all["\']\s*\)', 'hide_all()', text)
         text = re.sub(r'hide\(\s*["\']?all["\']?\s*\)',            'hide_all()', text)
