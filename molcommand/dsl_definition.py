@@ -263,7 +263,7 @@ class DSL(DSLInterface):
             if not stripped:
                 continue
 
-            # Accept select / select_* / add / update / delete / hide / show / color_*
+        # Accept select / select_* / add / update / delete / hide / show / color_*
             if re.match(
                 r'^\s*(\w+\s*=)?\s*((?:select|add|update|delete|hide|show)(?:_\w+)?|color_\w+)\s*\(',
                 stripped
@@ -281,7 +281,8 @@ class DSL(DSLInterface):
                     buffer = ''
                     inside = False
             else:
-                print(f"[INFO] ⚠️ Ignoring non-DSL line: {stripped}")
+                if self.debug_enabled:
+                    print(f"[INFO] ⚠️ Ignoring non-DSL line: {stripped}")
 
         # ---- New: filter out invalid select(...) lines (e.g., select(score=...))
         def _is_valid(line: str) -> bool:
@@ -431,6 +432,27 @@ class DSL(DSLInterface):
         elif stmt == 'update_coloring':
             args.setdefault('method', 'chain')
 
+        # --- Representation name synonyms ---
+        if stmt == 'show':
+            rep = args.get('rep')
+            if isinstance(rep, str):
+                rep_syn = {
+                    'licorice': 'lines',
+                    'stick': 'lines',
+                    'ball+stick': 'lines',
+                    'ball_and_stick': 'lines',
+                    'spacefill': 'spheres',
+                    'vdw': 'spheres',
+                    'cpk': 'spheres',
+                    'ribbon': 'cartoon',
+                    'tube': 'cartoon'
+                }
+                norm = rep_syn.get(rep.lower())
+                if norm:
+                    args['rep'] = norm
+                allowed = {'cartoon','lines','spheres','surface'}
+                if isinstance(args.get('rep'), str) and args['rep'] not in allowed:
+                    args['rep'] = 'lines'
 
         # --- SHOW/HIDE/COLOR_BY_CHAIN normalization ---
         # Accept four-letter PDB codes in sel and make them real selection tokens (all_<code>).
@@ -445,7 +467,7 @@ class DSL(DSLInterface):
                 args.setdefault('rep', 'cartoon')
             if stmt == 'color_by_chain':
                 args.setdefault('target', 'cartoon')
-    
+
         # --- ADD_STRUCTURE normalization ---
         if stmt == 'add_structure':
             for k in ('name', 'pdb', 'pdbid', 'PDB', 'id'):
@@ -486,6 +508,52 @@ class DSL(DSLInterface):
           add_structure(PDBID="CODE") exists if a PDB code was referenced.
         """
         text = dsl_text or ""
+
+        # --- Session cache for loaded PDB codes (persisted in CHROMA_PATH) ---
+        _loaded_codes_path = os.path.join(self.CHROMA_PATH, "loaded_codes.json")
+
+        def _read_loaded_codes():
+            try:
+                with open(_loaded_codes_path, "r") as f:
+                    arr = json.load(f)
+                if isinstance(arr, list):
+                    return [c for c in arr if isinstance(c, str) and re.fullmatch(r"[0-9A-Za-z]{4}", c)]
+            except Exception:
+                pass
+            return []
+
+        def _write_loaded_codes(codes):
+            try:
+                os.makedirs(os.path.dirname(_loaded_codes_path), exist_ok=True)
+                with open(_loaded_codes_path, "w") as f:
+                    json.dump(codes, f)
+            except Exception:
+                pass
+
+        def _update_loaded_codes_from_text(t):
+            prev = _read_loaded_codes()
+            seen = set(c.lower() for c in prev)
+            new = []
+            # add_structure(PDBID="CODE")
+            for m in re.findall(r'add_structure\(\s*PDBID\s*=\s*["\']([0-9A-Za-z]{4})["\']\s*\)', t, re.IGNORECASE):
+                c = m.lower()
+                if c not in seen:
+                    new.append(c); seen.add(c)
+            # sel="all_CODE"
+            for m in re.findall(r'sel\s*=\s*["\']all_([0-9A-Za-z]{4})["\']', t, re.IGNORECASE):
+                c = m.lower()
+                if c not in seen:
+                    new.append(c); seen.add(c)
+            # select(all_CODE)
+            for m in re.findall(r'select\(\s*all_([0-9A-Za-z]{4})\s*\)', t, re.IGNORECASE):
+                c = m.lower()
+                if c not in seen:
+                    new.append(c); seen.add(c)
+            if new:
+                _write_loaded_codes(prev + new)
+
+        # Track any codes mentioned in this DSL chunk before we start heavy rewrites
+        _update_loaded_codes_from_text(text)
 
         # --- If select() references a PDB code, ensure we load it first (case-insensitive) ---
         def _pdb_from_select(t: str):
@@ -578,7 +646,6 @@ class DSL(DSLInterface):
                 return 'select(last)'
             text = re.sub(r'\bselect\(\s*\)', _fill_select_empty, text)
 
-
         # If a call uses sel="XXXX" (4-char PDB code), create a selection first and
         # rewrite sel to "all_xxxx".
         def _inject_select_for_show_like(txt: str) -> str:
@@ -593,12 +660,18 @@ class DSL(DSLInterface):
             pattern = _re.compile(r'(?P<func>show|hide|color_by_chain)\(\s*sel\s*=\s*"(?P<code>[0-9A-Za-z]{4})"\s*(?P<rest>,[^)]*)?\)', _re.IGNORECASE)
             return _re.sub(pattern, repl, txt)
         text = _inject_select_for_show_like(text)
-    
-        # HIDE everything → hide_all()
-        text = re.sub(r'hide\(\s*scope\s*=\s*["\']all["\']\s*\)', 'hide_all()', text)
-        text = re.sub(r'hide\(\s*["\']?all["\']?\s*\)',            'hide_all()', text)
-        text = re.sub(r'\bhide_all\b(?!\s*\()', 'hide_all()', text)
 
+        # HIDE everything → hide(all)
+        text = re.sub(r'hide\(\s*scope\s*=\s*["\']all["\']\s*\)', 'hide(all)', text)
+        text = re.sub(r'hide\(\s*["\']all["\']\s*\)',               'hide(all)', text)
+        text = re.sub(r'\bhide\(\s*\)',                                'hide(all)', text)
+
+        # Expand global hide to one hide per loaded PDB (e.g., hide(sel="all_1crn"))
+        if re.search(r'\bhide\(\s*all\s*\)', text, re.IGNORECASE):
+            _codes = _read_loaded_codes()
+            if _codes:
+                expansion = "\n".join([f'hide(sel="all_{c}")' for c in _codes])
+                text = re.sub(r'\bhide\(\s*all\s*\)', expansion, text, flags=re.IGNORECASE)
 
         # --- After all rewrites: optionally strip select(...) when we've just loaded a PDB ---
         # If MCL_STRIP_SELECT=1 (default), remove select(...) lines when an add_structure(...) is present.
@@ -608,8 +681,7 @@ class DSL(DSLInterface):
             if has_add:
                 # Drop any select(...) lines (case-insensitive) — validator currently rejects them.
                 lines = [ln for ln in lines if not re.match(r'\s*select\s*\(', ln, re.IGNORECASE)]
-                text = "\n".join(lines)
-
+                tex= "\n".join(lines)
 
         # Representation/Coloring enums as bare tokens
         text = re.sub(r'update_representation\(\s*type\s*=\s*["\']([^"\']+)["\']\s*\)',
