@@ -41,7 +41,9 @@ class DSL(DSLInterface):
         self._syntax = load_yaml_file(syntax_path)
         self._rules = load_yaml_file(rules_path)
         self._hierarchy_schema = load_yaml_file(hierarchy_path)
-        self._sysprompt_entity_context, self._usrprompt_entity_context = load_prompt("entity_context", entity_ctx_path)
+        self._sysprompt_entity_context, self._usrprompt_entity_context = load_prompt(
+            "entity_context", entity_ctx_path
+        )
 
     # --------------------------
     # Prompt scaffolding helpers
@@ -63,22 +65,22 @@ class DSL(DSLInterface):
                 parts.append("- " + entry["text"])
 
         parts.append("\n### Select Statements")
-        for entry in self._syntax.get('select_statements', []):
+        for entry in self._syntax.get("select_statements", []):
             if isinstance(entry, dict) and any(e in entry["entities"] for e in entities):
                 parts.append(entry["text"])
 
         parts.append("\n### Add Statements")
-        for entry in self._syntax.get('add_statements', []):
+        for entry in self._syntax.get("add_statements", []):
             if isinstance(entry, dict) and any(e in entry["entities"] for e in entities):
                 parts.append(entry["text"])
 
         parts.append("\n### Update Statements")
-        for entry in self._syntax.get('update_statements', []):
+        for entry in self._syntax.get("update_statements", []):
             if isinstance(entry, dict) and any(e in entry["entities"] for e in entities):
                 parts.append(entry["text"])
 
         parts.append("\n### Delete Statements")
-        for entry in self._syntax.get('delete_statements', []):
+        for entry in self._syntax.get("delete_statements", []):
             if isinstance(entry, dict) and any(e in entry["entities"] for e in entities):
                 parts.append(entry["text"])
 
@@ -90,7 +92,7 @@ class DSL(DSLInterface):
         for entry in self._rules.get("global_rules", []):
             if isinstance(entry, dict):
                 parts.append("- " + entry["text"])
-        for entry in self._rules.get('entity_rules', []):
+        for entry in self._rules.get("entity_rules", []):
             if isinstance(entry, dict) and any(e in entry["entities"] for e in entities):
                 parts.append("- " + entry["text"])
         return "\n".join(parts)
@@ -151,27 +153,26 @@ class DSL(DSLInterface):
         """Maps alias statement names to canonical DSL function names."""
         return {
             # Office aliases (existing)
-            'add_picture':      'add_images',
-            'delete_image':     'delete_shapes',
-
+            "add_picture": "add_images",
+            "delete_image": "delete_shapes",
             # MolCommandNL friendly forms → canonical validator verbs
-            'select_structure':         'select',
-            'select_atoms':             'select',
-            'select_all':               'select',
-            'select_cartoons_by_chain': 'select',
-            'load_pdb':                 'add_structure',
-            'insert_protein':           'add_structure',
-            'hide_all':                 'hide',
-            'show_as_cartoon':          'update_representation',
-            'show_cartoon':             'update_representation',
-            'color_chains':             'update_coloring',
-            'colour_chains':            'update_coloring',
+            "select_structure": "select",
+            "select_atoms": "select",
+            "select_all": "select",
+            "select_cartoons_by_chain": "select",
+            "load_pdb": "add_structure",
+            "insert_protein": "add_structure",
+            "hide_all": "hide",
+            "show_as_cartoon": "update_representation",
+            "show_cartoon": "update_representation",
+            "color_chains": "update_coloring",
+            "colour_chains": "update_coloring",
         }
 
     def get_valid_enums(self) -> Dict[str, List[str]]:
         return {
-            'underline': ['None', 'Single', 'Double', 'Wavy'],
-            'horizontalAlignment': ['Left', 'Center', 'Right']
+            "underline": ["None", "Single", "Double", "Wavy"],
+            "horizontalAlignment": ["Left", "Center", "Right"],
         }
 
     # --------------------------
@@ -189,29 +190,29 @@ class DSL(DSLInterface):
 
         entity_types = self._expand_entity_types_for_context(entity_types)
 
-        if tree.get('_type') in entity_types:
+        if tree.get("_type") in entity_types:
             if self.debug_enabled:
                 print(f"[SUB-DGB] We matched entity type {tree.get('_type')}!")
             return tree
 
-        if 'slides' in tree:
+        if "slides" in tree:
             pruned_slides = []
-            for slide in tree['slides']:
+            for slide in tree["slides"]:
                 pruned_slide = self.prune_context_tree(slide, entity_types)
                 if pruned_slide:
                     pruned_slides.append(pruned_slide)
             if pruned_slides:
-                return {'slides': pruned_slides}
+                return {"slides": pruned_slides}
             return None
 
-        if 'shapes' in tree:
+        if "shapes" in tree:
             pruned_shapes = []
-            for shape in tree['shapes']:
+            for shape in tree["shapes"]:
                 pruned_shape = self.prune_context_tree(shape, entity_types)
                 if pruned_shape:
                     pruned_shapes.append(pruned_shape)
             if pruned_shapes:
-                return {'shapes': pruned_shapes}
+                return {"shapes": pruned_shapes}
             return None
 
         pruned = {}
@@ -226,8 +227,11 @@ class DSL(DSLInterface):
                 if pruned_list:
                     pruned[key] = pruned_list
             else:
-                if any(self._node_contains_entity(child, entity_types)
-                       for child in tree.values() if isinstance(child, (dict, list))):
+                if any(
+                    self._node_contains_entity(child, entity_types)
+                    for child in tree.values()
+                    if isinstance(child, (dict, list))
+                ):
                     pruned[key] = value
 
         return pruned if pruned else None
@@ -241,7 +245,7 @@ class DSL(DSLInterface):
 
     def _node_contains_entity(self, node, entity_types):
         if isinstance(node, dict):
-            if node.get('_type') in entity_types:
+            if node.get("_type") in entity_types:
                 return True
             return any(self._node_contains_entity(v, entity_types) for v in node.values())
         elif isinstance(node, list):
@@ -256,29 +260,29 @@ class DSL(DSLInterface):
         Extract valid DSL instruction lines from raw LLM output.
         Capture both canonical verbs and friendly shorthands.
         """
-        lines, buffer, inside = [], '', False
+        lines, buffer, inside = [], "", False
 
         for line in io.StringIO(raw or ""):
             stripped = line.strip()
             if not stripped:
                 continue
 
-        # Accept select / select_* / add / update / delete / hide / show / color_*
+            # Accept select / select_* / add / update / delete / hide / show / color_*
             if re.match(
-                r'^\s*(\w+\s*=)?\s*((?:select|add|update|delete|hide|show)(?:_\w+)?|color_\w+)\s*\(',
-                stripped
+                r"^\s*(\w+\s*=)?\s*((?:select|add|update|delete|hide|show)(?:_\w+)?|color_\w+)\s*\(",
+                stripped,
             ):
                 buffer = stripped
                 inside = True
-                if stripped.endswith(')'):
+                if stripped.endswith(")"):
                     lines.append(buffer)
-                    buffer = ''
+                    buffer = ""
                     inside = False
             elif inside:
-                buffer += ' ' + stripped
-                if stripped.endswith(')'):
+                buffer += " " + stripped
+                if stripped.endswith(")"):
                     lines.append(buffer)
-                    buffer = ''
+                    buffer = ""
                     inside = False
             else:
                 if self.debug_enabled:
@@ -286,17 +290,17 @@ class DSL(DSLInterface):
 
         # ---- New: filter out invalid select(...) lines (e.g., select(score=...))
         def _is_valid(line: str) -> bool:
-            m = re.match(r'^\s*(?:\w+\s*=)?\s*(\w+)\s*\((.*)\)\s*$', line)
+            m = re.match(r"^\s*(?:\w+\s*=)?\s*(\w+)\s*\((.*)\)\s*$", line)
             if not m:
                 return False
             func, argstr = m.group(1), m.group(2)
-            if func != 'select':
+            if func != "select":
                 return True
-            if 'score=' in argstr:
+            if "score=" in argstr:
                 return False
             # If key=value pairs are present, all keys must be allowed
-            if '=' in argstr:
-                keys = [k.strip() for k in re.findall(r'(\w+)\s*=', argstr)]
+            if "=" in argstr:
+                keys = [k.strip() for k in re.findall(r"(\w+)\s*=", argstr)]
                 return all(k in ALLOWED_SELECT_KEYS for k in keys)
             # Bare positional token is fine (e.g., select(all_1kx2))
             return True
@@ -325,7 +329,8 @@ class DSL(DSLInterface):
         args = node["args"]
 
         if "scope" not in args and any(
-                k in self._hierarchy_schema["contextual_scopes"].get(target_entity, []) for k in args):
+            k in self._hierarchy_schema["contextual_scopes"].get(target_entity, []) for k in args
+        ):
             return node
 
         scope_entity = args.get("scope")
@@ -341,7 +346,8 @@ class DSL(DSLInterface):
             try:
                 if not isinstance(scope_entity, str):
                     raise ValueError(
-                        f"Scope must be a string or special keyword. Got: {scope_entity} (type: {type(scope_entity)})"
+                        f"Scope must be a string or special keyword. Got: {scope_entity} "
+                        f"(type: {type(scope_entity)})"
                     )
             except ValueError as e:
                 print(f"[ERROR] : {e} -> will use default scope!")
@@ -382,107 +388,109 @@ class DSL(DSLInterface):
         - Heuristic mapping for PDB IDs.
         - Clamp numeric [0,1] where relevant.
         """
-        stmt = node.get('stmt', '')
-        args = node.setdefault('args', {})
+        stmt = node.get("stmt", "")
+        args = node.setdefault("args", {})
 
         # Common arg synonyms
-        if 'selection' in args and 'sel' not in args:
-            args['sel'] = args.pop('selection')
-        if 'path' in args and 'filePath' not in args:
-            args['filePath'] = args.pop('path')
-        if 'file' in args and 'filePath' not in args:
-            args['filePath'] = args.pop('file')
+        if "selection" in args and "sel" not in args:
+            args["sel"] = args.pop("selection")
+        if "path" in args and "filePath" not in args:
+            args["filePath"] = args.pop("path")
+        if "file" in args and "filePath" not in args:
+            args["filePath"] = args.pop("file")
 
         # --- SELECT normalization ---
-        if stmt == 'select':
+        if stmt == "select":
             # Drop any select with unknown keys early
             invalid = [k for k in list(args.keys()) if k not in ALLOWED_SELECT_KEYS]
             if invalid:
                 print(f"[INFO] Dropping select(...) with invalid keys: {invalid}")
                 return None
 
-            pdb = args.pop('structureName', None) or args.pop('pdb', None) or args.pop('PDB', None)
-            nm  = args.get('name')
+            pdb = args.pop("structureName", None) or args.pop("pdb", None) or args.pop("PDB", None)
+            nm = args.get("name")
 
             # If user passed a 4-char code, normalize to all_<code>
             code = None
-            if isinstance(pdb, str) and re.fullmatch(r'[0-9a-zA-Z]{4}', pdb.strip()):
+            if isinstance(pdb, str) and re.fullmatch(r"[0-9a-zA-Z]{4}", pdb.strip()):
                 code = pdb.strip().lower()
-            elif isinstance(nm, str) and re.fullmatch(r'[0-9a-zA-Z]{4}', nm.strip()):
+            elif isinstance(nm, str) and re.fullmatch(r"[0-9a-zA-Z]{4}", nm.strip()):
                 code = nm.strip().lower()
 
             if code:
-                args['query'] = args.get('query') or "all"
-                args['name']  = args.get('name')  or code
+                args["query"] = args.get("query") or "all"
+                args["name"] = args.get("name") or code
             else:
-                if isinstance(nm, str) and 'query' not in args:
-                    args['query'] = "all"
+                if isinstance(nm, str) and "query" not in args:
+                    args["query"] = "all"
 
-            args.pop('id', None)
+            args.pop("id", None)
 
         # --- HIDE normalization ---
-        elif stmt == 'hide':
+        elif stmt == "hide":
             if not args:
-                args['scope'] = 'all'
+                args["scope"] = "all"
 
         # --- Representation & coloring defaults ---
-        elif stmt == 'update_representation':
-            args.setdefault('type', 'cartoon')
+        elif stmt == "update_representation":
+            args.setdefault("type", "cartoon")
 
-        elif stmt == 'update_coloring':
-            args.setdefault('method', 'chain')
+        elif stmt == "update_coloring":
+            args.setdefault("method", "chain")
 
         # --- Representation name synonyms ---
-        if stmt == 'show':
-            rep = args.get('rep')
+        if stmt == "show":
+            rep = args.get("rep")
             if isinstance(rep, str):
                 rep_syn = {
-                    'licorice': 'lines',
-                    'stick': 'lines',
-                    'ball+stick': 'lines',
-                    'ball_and_stick': 'lines',
-                    'spacefill': 'spheres',
-                    'vdw': 'spheres',
-                    'cpk': 'spheres',
-                    'ribbon': 'cartoon',
-                    'tube': 'cartoon'
+                    "licorice": "lines",
+                    "stick": "lines",
+                    "ball+stick": "lines",
+                    "ball_and_stick": "lines",
+                    "spacefill": "spheres",
+                    "vdw": "spheres",
+                    "cpk": "spheres",
+                    "ribbon": "cartoon",
+                    "tube": "cartoon",
                 }
                 norm = rep_syn.get(rep.lower())
                 if norm:
-                    args['rep'] = norm
-                allowed = {'cartoon','lines','spheres','surface'}
-                if isinstance(args.get('rep'), str) and args['rep'] not in allowed:
-                    args['rep'] = 'lines'
+                    args["rep"] = norm
+                allowed = {"cartoon", "lines", "spheres", "surface"}
+                if isinstance(args.get("rep"), str) and args["rep"] not in allowed:
+                    args["rep"] = "lines"
 
         # --- SHOW/HIDE/COLOR_BY_CHAIN normalization ---
         # Accept four-letter PDB codes in sel and make them real selection tokens (all_<code>).
-        if stmt in ('show', 'hide', 'color_by_chain'):
+        if stmt in ("show", "hide", "color_by_chain"):
+
             def _sel_token(v):
-                if isinstance(v, str) and re.fullmatch(r'[0-9A-Za-z]{4}', v):
-                    return 'all_' + v.lower()
+                if isinstance(v, str) and re.fullmatch(r"[0-9A-Za-z]{4}", v):
+                    return "all_" + v.lower()
                 return v
-            if 'sel' in args:
-                args['sel'] = _sel_token(args['sel'])
-            if stmt == 'show':
-                args.setdefault('rep', 'cartoon')
-            if stmt == 'color_by_chain':
-                args.setdefault('target', 'cartoon')
+
+            if "sel" in args:
+                args["sel"] = _sel_token(args["sel"])
+            if stmt == "show":
+                args.setdefault("rep", "cartoon")
+            if stmt == "color_by_chain":
+                args.setdefault("target", "cartoon")
 
         # --- ADD_STRUCTURE normalization ---
-        if stmt == 'add_structure':
-            for k in ('name', 'pdb', 'pdbid', 'PDB', 'id'):
-                if k in args and 'PDBID' not in args:
+        if stmt == "add_structure":
+            for k in ("name", "pdb", "pdbid", "PDB", "id"):
+                if k in args and "PDBID" not in args:
                     val = str(args[k]).strip()
-                    if re.fullmatch(r'[0-9a-zA-Z]{4}', val):
-                        args['PDBID'] = args.pop(k)
+                    if re.fullmatch(r"[0-9a-zA-Z]{4}", val):
+                        args["PDBID"] = args.pop(k)
                         break
 
         # Clamp Office numeric fields
-        for key in ('fillTransparency', 'lineTransparency'):
+        for key in ("fillTransparency", "lineTransparency"):
             if key in args and isinstance(args[key], (int, float)):
                 args[key] = max(0.0, min(1.0, args[key]))
 
-        node['args'] = args
+        node["args"] = args
         return node
 
     # --------------------------
@@ -535,20 +543,25 @@ class DSL(DSLInterface):
             seen = set(c.lower() for c in prev)
             new = []
             # add_structure(PDBID="CODE")
-            for m in re.findall(r'add_structure\(\s*PDBID\s*=\s*["\']([0-9A-Za-z]{4})["\']\s*\)', t, re.IGNORECASE):
+            for m in re.findall(
+                r'add_structure\(\s*PDBID\s*=\s*["\']([0-9A-Za-z]{4})["\']\s*\)', t, re.IGNORECASE
+            ):
                 c = m.lower()
                 if c not in seen:
-                    new.append(c); seen.add(c)
+                    new.append(c)
+                    seen.add(c)
             # sel="all_CODE"
             for m in re.findall(r'sel\s*=\s*["\']all_([0-9A-Za-z]{4})["\']', t, re.IGNORECASE):
                 c = m.lower()
                 if c not in seen:
-                    new.append(c); seen.add(c)
+                    new.append(c)
+                    seen.add(c)
             # select(all_CODE)
             for m in re.findall(r'select\(\s*all_([0-9A-Za-z]{4})\s*\)', t, re.IGNORECASE):
                 c = m.lower()
                 if c not in seen:
-                    new.append(c); seen.add(c)
+                    new.append(c)
+                    seen.add(c)
             if new:
                 _write_loaded_codes(prev + new)
 
@@ -558,17 +571,31 @@ class DSL(DSLInterface):
         # --- If select() references a PDB code, ensure we load it first (case-insensitive) ---
         def _pdb_from_select(t: str):
             m = re.search(r'select\(\s*"?(?:name:)?([0-9A-Za-z]{4})"?\s*\)', t, re.IGNORECASE)
-            if m: return m.group(1)
-            m = re.search(r'select\(\s*all_([0-9A-Za-z]{4})\s*\)', t, re.IGNORECASE)
-            if m: return m.group(1)
-            m = re.search(r'select\(\s*[^)]*\bname\s*=\s*["\']([0-9A-Za-z]{4})["\']', t, re.IGNORECASE)
-            if m: return m.group(1)
-            m = re.search(r'select\(\s*[^)]*\bPDBID\s*=\s*["\']([0-9A-Za-z]{4})["\']', t, re.IGNORECASE)
-            if m: return m.group(1)
+            if m:
+                return m.group(1)
+            m = re.search(r"select\(\s*all_([0-9A-Za-z]{4})\s*\)", t, re.IGNORECASE)
+            if m:
+                return m.group(1)
+            m = re.search(
+                r'select\(\s*[^)]*\bname\s*=\s*["\']([0-9A-Za-z]{4})["\']',
+                t,
+                re.IGNORECASE,
+            )
+            if m:
+                return m.group(1)
+            m = re.search(
+                r'select\(\s*[^)]*\bPDBID\s*=\s*["\']([0-9A-Za-z]{4})["\']',
+                t,
+                re.IGNORECASE,
+            )
+            if m:
+                return m.group(1)
             return None
 
         code = _pdb_from_select(text)
-        if code and re.search(rf'add_structure\(\s*PDBID\s*=\s*"{re.escape(code)}"\s*\)', text, re.IGNORECASE) is None:
+        if code and re.search(
+            rf'add_structure\(\s*PDBID\s*=\s*"{re.escape(code)}"\s*\)', text, re.IGNORECASE
+        ) is None:
             text = f'add_structure(PDBID="{code}")\n' + text
 
         # --- SELECT named-args → positional QUERY token (still intermediate) ---
@@ -581,117 +608,174 @@ class DSL(DSLInterface):
         def _select_rewrite(m: re.Match) -> str:
             inside = m.group(1)
             # Parse simple k=v pairs (string or bare)
-            kv = dict((k.strip(), _strip_quotes(v))
-                      for k, v in re.findall(r'(\w+)\s*=\s*(".*?"|\'.*?\'|[^,)\s]+)', inside))
+            kv = dict(
+                (k.strip(), _strip_quotes(v))
+                for k, v in re.findall(r'(\w+)\s*=\s*(".*?"|\'.*?\'|[^,)\s]+)', inside)
+            )
 
             # Helper: detect 4-char code and "all_<code>" (case-insensitive)
             def _code_from_name(n: Optional[str]) -> Optional[str]:
                 if not isinstance(n, str):
                     return None
-                if re.fullmatch(r'[0-9a-zA-Z]{4}', n):
+                if re.fullmatch(r"[0-9a-zA-Z]{4}", n):
                     return n.lower()
-                m2 = re.fullmatch(r'all_([0-9a-zA-Z]{4})', n, re.IGNORECASE)
+                m2 = re.fullmatch(r"all_([0-9a-zA-Z]{4})", n, re.IGNORECASE)
                 if m2:
                     return m2.group(1).lower()
                 return None
 
             # 1) If query already is all_<code>, use it directly (case-insensitive)
-            q = kv.get('query')
-            if isinstance(q, str) and re.fullmatch(r'all_[0-9a-zA-Z]{4}', q, re.IGNORECASE):
+            q = kv.get("query")
+            if isinstance(q, str) and re.fullmatch(r"all_[0-9a-zA-Z]{4}", q, re.IGNORECASE):
                 return f"select({q})"
 
             # 2) query == "all" + 4-char name → all_<code>
-            if isinstance(q, str) and q.lower() == 'all':
-                code = _code_from_name(kv.get('name')) or _code_from_name(kv.get('PDBID'))
-                if code:
-                    token = ("ALL_" + code.upper()) if os.environ.get("MCL_QUERY_UPPER") == "1" else ("all_" + code)
-                    return f"select({token})"
+            if isinstance(q, str) and q.lower() == "all":
+                code2 = _code_from_name(kv.get("name")) or _code_from_name(kv.get("PDBID"))
+                if code2:
+                    token2 = (
+                        "ALL_" + code2.upper()
+                        if os.environ.get("MCL_QUERY_UPPER") == "1"
+                        else "all_" + code2
+                    )
+                    return f"select({token2})"
 
             # 3) Only name or PDBID provided → try to synthesize all_<code>
-            code = _code_from_name(kv.get('name')) or _code_from_name(kv.get('PDBID'))
-            if code:
-                token = ("ALL_" + code.upper()) if os.environ.get("MCL_QUERY_UPPER") == "1" else ("all_" + code)
-                return f"select({token})"
+            code3 = _code_from_name(kv.get("name")) or _code_from_name(kv.get("PDBID"))
+            if code3:
+                token3 = (
+                    "ALL_" + code3.upper()
+                    if os.environ.get("MCL_QUERY_UPPER") == "1"
+                    else "all_" + code3
+                )
+                return f"select({token3})"
 
             # 4) Fall back to select(query) for safe tokens
-            if isinstance(q, str) and re.fullmatch(r'[A-Za-z0-9_:.+-]+', q):
+            if isinstance(q, str) and re.fullmatch(r"[A-Za-z0-9_:.+-]+", q):
                 return f"select({q})"
 
             return m.group(0)
 
-        text = re.sub(r'\bselect\(\s*([^)]+)\)', _select_rewrite, text)
+        text = re.sub(r"\bselect\(\s*([^)]+)\)", _select_rewrite, text)
 
         # --- Normalize any specialized select(...) to a validator token ---
         sel_token = os.environ.get("MCL_SELECT_TOKEN", "last")
+
+        # NEW: Always normalize empty-selects early to avoid validator errors
+        text = re.sub(r"\bselect\(\s*\)", f"select({sel_token})", text)
+
         # quoted colon form → select(TOKEN)
-        text = re.sub(r'(?i)select\(\s*"name:[^"]+"\s*\)', lambda _: f'select({sel_token})', text)
+        text = re.sub(
+            r'(?i)select\(\s*"name:[^"]+"\s*\)',
+            lambda _: f"select({sel_token})",
+            text,
+        )
         # unquoted colon form → select(TOKEN)
-        text = re.sub(r'(?i)select\(\s*name:[^)]+\)',           lambda _: f'select({sel_token})', text)
-        # all_CODE form → select(TOKEN)
-        text = re.sub(r'(?i)select\(\s*all_[^)]+\)',            lambda _: f'select({sel_token})', text)
+        text = re.sub(
+            r"(?i)select\(\s*name:[^)]+\)",
+            lambda _: f"select({sel_token})",
+            text,
+        )
+        # NOTE: we intentionally DO NOT rewrite select(all_CODE) here so the validator sees all_<code>.
+
         # Just in case: strip quotes around last/all
-        text = re.sub(r'select\(\s*"(last|all)"\s*\)', r'select(\1)', text)
+        text = re.sub(r'select\(\s*"(last|all)"\s*\)', r"select(\1)", text)
 
         # Optional colon-style rewrite (disabled by default; kept for completeness)
         if os.environ.get("MCL_ENABLE_COLON_SELECT", "0") == "1":
-            text = re.sub(r'select\(\s*"id:([^"]+)"\s*\)',   r'select("id:\1")',   text)
+            text = re.sub(r'select\(\s*"id:([^"]+)"\s*\)', r'select("id:\1")', text)
             text = re.sub(r'select\(\s*"name:([^"]+)"\s*\)', r'select("name:\1")', text)
-            text = re.sub(r'select\(\s*name\s*=\s*["\']([^"\']+)["\']\s*\)',  r'select("name:\1")', text)
-            text = re.sub(r'select\(\s*PDBID\s*=\s*["\']([^"\']+)["\']\s*\)', r'select("name:\1")', text)
-            text = re.sub(r'select\(\s*name\(\s*["\']([^"\']+)["\']\s*\)\s*\)', r'select("name:\1")', text)
-            text = re.sub(r'select\(\s*name\s*:\s*([A-Za-z0-9_-]+)\s*\)', r'select("name:\1")', text)
-
-            def _fill_select_empty(_m):
-                # Keep empty-select fallback simple and unquoted
-                return 'select(last)'
-            text = re.sub(r'\bselect\(\s*\)', _fill_select_empty, text)
+            text = re.sub(
+                r'select\(\s*name\s*=\s*["\']([^"\']+)["\']\s*\)',
+                r'select("name:\1")',
+                text,
+            )
+            text = re.sub(
+                r'select\(\s*PDBID\s*=\s*["\']([^"\']+)["\']\s*\)',
+                r'select("name:\1")',
+                text,
+            )
+            text = re.sub(
+                r'select\(\s*name\(\s*["\']([^"\']+)["\']\s*\)\s*\)',
+                r'select("name:\1")',
+                text,
+            )
+            text = re.sub(
+                r'select\(\s*name\s*:\s*([A-Za-z0-9_-]+)\s*\)',
+                r'select("name:\1")',
+                text,
+            )
+            # No extra empty-select handler here; we already normalized above.
 
         # If a call uses sel="XXXX" (4-char PDB code), create a selection first and
         # rewrite sel to "all_xxxx".
         def _inject_select_for_show_like(txt: str) -> str:
             import re as _re
+
             def repl(m):
-                func = m.group('func')
-                code = m.group('code').lower()
-                rest = m.group('rest') or ''
-                token = ('ALL_' + code.upper()) if os.environ.get('MCL_QUERY_UPPER') == '1' else ('all_' + code)
-                call = f'{func}(sel="{token}"{rest})'
-                return f'select({token})\n' + call
-            pattern = _re.compile(r'(?P<func>show|hide|color_by_chain)\(\s*sel\s*=\s*"(?P<code>[0-9A-Za-z]{4})"\s*(?P<rest>,[^)]*)?\)', _re.IGNORECASE)
+                func = m.group("func")
+                code4 = m.group("code").lower()
+                rest = m.group("rest") or ""
+                token4 = (
+                    "ALL_" + code4.upper()
+                    if os.environ.get("MCL_QUERY_UPPER") == "1"
+                    else "all_" + code4
+                )
+                call = f'{func}(sel="{token4}"{rest})'
+                return f"select({token4})\n" + call
+
+            pattern = _re.compile(
+                r'(?P<func>show|hide|color_by_chain)\(\s*sel\s*=\s*"(?P<code>[0-9A-Za-z]{4})"\s*(?P<rest>,[^)]*)?\)',
+                _re.IGNORECASE,
+            )
             return _re.sub(pattern, repl, txt)
+
         text = _inject_select_for_show_like(text)
 
         # HIDE everything → hide(all)
-        text = re.sub(r'hide\(\s*scope\s*=\s*["\']all["\']\s*\)', 'hide(all)', text)
-        text = re.sub(r'hide\(\s*["\']all["\']\s*\)',               'hide(all)', text)
-        text = re.sub(r'\bhide\(\s*\)',                                'hide(all)', text)
+        text = re.sub(r'hide\(\s*scope\s*=\s*["\']all["\']\s*\)', "hide(all)", text)
+        text = re.sub(r'hide\(\s*["\']all["\']\s*\)', "hide(all)", text)
+        text = re.sub(r"\bhide\(\s*\)", "hide(all)", text)
 
-        # Expand global hide to one hide per loaded PDB (e.g., hide(sel="all_1crn"))
-        if re.search(r'\bhide\(\s*all\s*\)', text, re.IGNORECASE):
+      # Expand global hide to one hide per loaded PDB (e.g., hide(sel="all_1crn"))
+        if re.search(r"\bhide\(\s*all\s*\)", text, re.IGNORECASE):
             _codes = _read_loaded_codes()
             if _codes:
                 expansion = "\n".join([f'hide(sel="all_{c}")' for c in _codes])
-                text = re.sub(r'\bhide\(\s*all\s*\)', expansion, text, flags=re.IGNORECASE)
+                text = re.sub(r"\bhide\(\s*all\s*\)", expansion, text, flags=re.IGNORECASE)
 
         # --- After all rewrites: optionally strip select(...) when we've just loaded a PDB ---
         # If MCL_STRIP_SELECT=1 (default), remove select(...) lines when an add_structure(...) is present.
         if os.environ.get("MCL_STRIP_SELECT", "1") == "1":
             lines = [ln for ln in (text.splitlines() or []) if ln.strip()]
-            has_add = any(re.match(r'\s*add_structure\(', ln) for ln in lines)
+            has_add = any(re.match(r"\s*add_structure\(", ln, re.IGNORECASE) for ln in lines)
             if has_add:
                 # Drop any select(...) lines (case-insensitive) — validator currently rejects them.
-                lines = [ln for ln in lines if not re.match(r'\s*select\s*\(', ln, re.IGNORECASE)]
-                tex= "\n".join(lines)
+                lines = [ln for ln in lines if not re.match(r"\s*select\s*\(", ln, re.IGNORECASE)]
+            text = "\n".join(lines)
+
 
         # Representation/Coloring enums as bare tokens
-        text = re.sub(r'update_representation\(\s*type\s*=\s*["\']([^"\']+)["\']\s*\)',
-                      r'update_representation(\1)', text)
-        text = re.sub(r'update_representation\(\s*["\']([^"\']+)["\']\s*\)',
-                      r'update_representation(\1)', text)
-        text = re.sub(r'update_coloring\(\s*method\s*=\s*["\']([^"\']+)["\']\s*\)',
-                      r'update_coloring(\1)', text)
-        text = re.sub(r'update_coloring\(\s*["\']([^"\']+)["\']\s*\)',
-                      r'update_coloring(\1)', text)
+        text = re.sub(
+            r'update_representation\(\s*type\s*=\s*["\']([^"\']+)["\']\s*\)',
+            r"update_representation(\1)",
+            text,
+        )
+        text = re.sub(
+            r'update_representation\(\s*["\']([^"\']+)["\']\s*\)',
+            r"update_representation(\1)",
+            text,
+        )
+        text = re.sub(
+            r'update_coloring\(\s*method\s*=\s*["\']([^"\']+)["\']\s*\)',
+            r"update_coloring(\1)",
+            text,
+        )
+        text = re.sub(
+            r'update_coloring\(\s*["\']([^"\']+)["\']\s*\)',
+            r"update_coloring(\1)",
+            text,
+        )
 
         return text
 
