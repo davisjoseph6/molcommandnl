@@ -23,3 +23,11 @@ items:
     context: null
     tags: ["file", "load"]
 
+  - id: add-pdb-1crn
+    utterance: "Load PDB ID 1crn"
+    dsl: 'add_structure(PDBID="1crn")'
+    entities: ["structure"]
+    context: null
+    tags: ["pdb", "load"]
+
+

@@ -9,3 +9,18 @@ items:
     context: null
     tags: ["color", "chain"]
 
+  - id: color-by-chain-cartoon-3eam
+    utterance: "Color the cartoon by chain for 3eam"
+    dsl: 'color_by_chain(sel="all_3eam", target="cartoon")'
+    entities: ["representation"]
+    context: null
+    tags: ["color", "chain"]
+
+  - id: color-by-chain-cartoon-1crn
+    utterance: "Color the cartoon by chain for 1crn"
+    dsl: 'color_by_chain(sel="all_1crn", target="cartoon")'
+    entities: ["representation"]
+    context: null
+    tags: ["color", "chain"]
+
+

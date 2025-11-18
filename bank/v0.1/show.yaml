@@ -16,3 +16,52 @@ items:
     context: null
     tags: ["show", "cartoon"]
 
+  - id: show-cartoon-3eam
+    utterance: "Show 3eam as cartoon"
+    dsl: 'show(sel="all_3eam", rep="cartoon")'
+    entities: ["representation"]
+    context: null
+    tags: ["show", "cartoon"]
+
+  - id: show-lines-3eam-licorice
+    utterance: "Show 3eam as licorice"
+    dsl: 'show(sel="all_3eam", rep="lines")'
+    entities: ["representation"]
+    context: null
+    tags: ["show", "licorice"]
+
+  - id: show-spheres-3eam
+    utterance: "Show 3eam as spheres"
+    dsl: 'show(sel="all_3eam", rep="spheres")'
+    entities: ["representation"]
+    context: null
+    tags: ["show", "spheres"]
+
+  - id: show-surface-3eam
+    utterance: "Show 3eam as surface"
+    dsl: 'show(sel="all_3eam", rep="surface")'
+    entities: ["representation"]
+    context: null
+    tags: ["show", "surface"]
+
+  - id: show-cartoon-1crn
+    utterance: "Show 1crn as cartoon"
+    dsl: 'show(sel="all_1crn", rep="cartoon")'
+    entities: ["representation"]
+    context: null
+    tags: ["show", "cartoon"]
+
+  - id: show-lines-1crn
+    utterance: "Show 1crn as lines"
+    dsl: 'show(sel="all_1crn", rep="lines")'
+    entities: ["representation"]
+    context: null
+    tags: ["show", "lines"]
+
+  - id: show-spheres-1crn
+    utterance: "Show 1crn as spheres"
+    dsl: 'show(sel="all_1crn", rep="spheres")'
+    entities: ["representation"]
+    context: null
+    tags: ["show", "spheres"]
+

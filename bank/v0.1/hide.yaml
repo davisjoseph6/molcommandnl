@@ -9,3 +9,25 @@ items:
     context: null
     tags: ["hide"]
 
+  - id: hide-all-3eam
+    utterance: "Hide 3eam"
+    dsl: 'hide(sel="all_3eam")'
+    entities: ["representation"]
+    context: null
+    tags: ["hide"]
+
+  - id: hide-all-1crn
+    utterance: "Hide 1crn"
+    dsl: 'hide(sel="all_1crn")'
+    entities: ["representation"]
+    context: null
+    tags: ["hide"]
+
+  - id: hide-everything
+    utterance: "Hide everything"
+    dsl: 'hide(scope="all")'
+    entities: ["representation"]
+    context: null
+    tags: ["hide", "global"]
+
+
