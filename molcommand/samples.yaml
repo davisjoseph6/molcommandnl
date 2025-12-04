@@ -4,7 +4,37 @@
     entities:
     - representation
     context: null
+- utterance: Color the cartoon by chain for 1crn
+  sub_samples:
+  - program: color_by_chain(sel="all_1crn", target="cartoon")
+    entities:
+    - representation
+    context: null
+- utterance: Color the cartoon by chain for 3eam
+  sub_samples:
+  - program: color_by_chain(sel="all_3eam", target="cartoon")
+    entities:
+    - representation
+    context: null
+- utterance: Hide 1crn
+  sub_samples:
+  - program: hide(sel="all_1crn")
+    entities:
+    - representation
+    context: null
 - utterance: Hide 1kx2
+  sub_samples:
+  - program: hide(sel="all_1kx2")
+    entities:
+    - representation
+    context: null
+- utterance: Hide 3eam
+  sub_samples:
+  - program: hide(sel="all_3eam")
+    entities:
+    - representation
+    context: null
+- utterance: Hide everything
   sub_samples:
   - program: hide(sel="all_1kx2")
     entities:
@@ -19,6 +49,12 @@
 - utterance: Load a structure from file 'myfile.pdb'
   sub_samples:
   - program: add_structure(filePath="myfile.pdb")
+    entities:
+    - structure
+    context: null
+- utterance: Load PDB ID 1crn
+  sub_samples:
+  - program: add_structure(PDBID="1crn")
     entities:
     - structure
     context: null
@@ -40,9 +76,51 @@
     entities:
     - selection
     context: null
+- utterance: Show 1crn as cartoon
+  sub_samples:
+  - program: show(sel="all_1crn", rep="cartoon")
+    entities:
+    - representation
+    context: null
+- utterance: Show 1crn as lines
+  sub_samples:
+  - program: show(sel="all_1crn", rep="lines")
+    entities:
+    - representation
+    context: null
+- utterance: Show 1crn as spheres
+  sub_samples:
+  - program: show(sel="all_1crn", rep="spheres")
+    entities:
+    - representation
+    context: null
 - utterance: Show 1kx2 as cartoon
   sub_samples:
   - program: show(sel="all_1kx2", rep="cartoon")
+    entities:
+    - representation
+    context: null
+- utterance: Show 3eam as cartoon
+  sub_samples:
+  - program: show(sel="all_3eam", rep="cartoon")
+    entities:
+    - representation
+    context: null
+- utterance: Show 3eam as licorice
+  sub_samples:
+  - program: show(sel="all_3eam", rep="lines")
+    entities:
+    - representation
+    context: null
+- utterance: Show 3eam as spheres
+  sub_samples:
+  - program: show(sel="all_3eam", rep="spheres")
+    entities:
+    - representation
+    context: null
+- utterance: Show 3eam as surface
+  sub_samples:
+  - program: show(sel="all_3eam", rep="surface")
     entities:
     - representation
     context: null

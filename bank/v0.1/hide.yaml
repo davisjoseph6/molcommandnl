@@ -25,9 +25,7 @@ items:
 
   - id: hide-everything
     utterance: "Hide everything"
-    dsl: 'hide(scope="all")'
+    dsl: 'hide(sel="all_1kx2")'
     entities: ["representation"]
     context: null
     tags: ["hide", "global"]
-
-
