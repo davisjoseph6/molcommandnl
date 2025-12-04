@@ -4,13 +4,14 @@ import os
 import io
 import string
 from typing import List, Dict, Any, Optional
+
 from dsl_interface import DSLInterface
 from utils import load_config, load_yaml_file
 from llm_client import load_prompt
 import json
 import inspect
 
-# ---- New: allow-list for select(...) keys
+# ---- Allow-list for select(...) keys (MolCommandNL side)
 ALLOWED_SELECT_KEYS = {"name", "query", "PDBID", "sel", "scope"}
 
 
@@ -109,8 +110,9 @@ class DSL(DSLInterface):
         text = query_text.lower()
 
         replacements = {
-            "how do i": "", "how to": "", "i want to": "", "can you tell me how to": "",
-            "can you": "", "please": "", "show me how to": "",
+            "how do i": "", "how to": "", "i want to": "",
+            "can you tell me how to": "", "can you": "",
+            "please": "", "show me how to": "",
             "what is the command for": "", "what is the syntax for": "",
             "command to": "", "code for": "",
         }
@@ -118,8 +120,8 @@ class DSL(DSLInterface):
             text = text.replace(p, r)
 
         text = self.extract_key_terms_as_string(text)
-
         text = " ".join(text.split())
+
         keyword_mappings = {
             "color": ["colorby", "coloring"],
             "select": ["selection"],
@@ -176,7 +178,7 @@ class DSL(DSLInterface):
         }
 
     # --------------------------
-    # Context pruning (kept)
+    # Context pruning (Office/ODSL side kept)
     # --------------------------
     def prune_context_tree(self, tree: dict, entity_types: list[str]) -> dict:
         if self.debug_enabled:
@@ -269,7 +271,8 @@ class DSL(DSLInterface):
 
             # Accept select / select_* / add / update / delete / hide / show / color_*
             if re.match(
-                r"^\s*(\w+\s*=)?\s*((?:select|add|update|delete|hide|show)(?:_\w+)?|color_\w+)\s*\(",
+                r"^\s*(\w+\s*=)?\s*"
+                r"((?:select|add|update|delete|hide|show)(?:_\w+)?|color_\w+)\s*\(",
                 stripped,
             ):
                 buffer = stripped
@@ -288,7 +291,7 @@ class DSL(DSLInterface):
                 if self.debug_enabled:
                     print(f"[INFO] ⚠️ Ignoring non-DSL line: {stripped}")
 
-        # ---- New: filter out invalid select(...) lines (e.g., select(score=...))
+        # ---- Filter out invalid select(...) lines (e.g., select(score=...))
         def _is_valid(line: str) -> bool:
             m = re.match(r"^\s*(?:\w+\s*=)?\s*(\w+)\s*\((.*)\)\s*$", line)
             if not m:
@@ -317,10 +320,7 @@ class DSL(DSLInterface):
     def validate_scope(self, node: Dict[str, Any]) -> Dict[str, Any]:
         if not node or not isinstance(node, dict):
             return node
-        if not node or not isinstance(node, dict):
-            return node
-        if not node or not isinstance(node, dict):
-            return node
+
         """Perform scope validation for select_* statements (Office DSL)."""
         if not node["stmt"].startswith("select_"):
             return node
@@ -354,7 +354,9 @@ class DSL(DSLInterface):
                 setDefaultFlag = True
 
         if setDefaultFlag:
-            default_scope = self._hierarchy_schema["scope_defaults"].get(node["stmt"], "Selection")
+            default_scope = self._hierarchy_schema["scope_defaults"].get(
+                node["stmt"], "Selection"
+            )
             print(f"[INFO] : normalized scope for '{node['stmt']}' to default {default_scope}")
             node["args"]["scope"] = default_scope
             scope_entity = default_scope
@@ -407,7 +409,8 @@ class DSL(DSLInterface):
                 print(f"[INFO] Dropping select(...) with invalid keys: {invalid}")
                 return None
 
-            pdb = args.pop("structureName", None) or args.pop("pdb", None) or args.pop("PDB", None)
+            pdb = args.pop("structureName", None) or args.pop("pdb", None) or \
+                args.pop("PDB", None)
             nm = args.get("name")
 
             # If user passed a 4-char code, normalize to all_<code>
@@ -504,16 +507,19 @@ class DSL(DSLInterface):
         self.debug_enabled = dbg
 
     # ---------- Final text-level adapter for the validator grammar ----------
-    def postprocess_for_validator(self, dsl_text: str, utterance: Optional[str] = None) -> str:
+    def postprocess_for_validator(
+        self,
+        dsl_text: str,
+        utterance: Optional[str] = None,
+    ) -> str:
         """
         Final rewrite to match UnityMol validator grammar where safe.
 
         IMPORTANT:
-        - By default we DO NOT rewrite select(...) into colon tokens (name: / id:)
-          because the validator expects a QUERY positional token (e.g., select(all_1kx2)).
-          For robustness here, we normalize all selections to select(TOKEN) where TOKEN
-          comes from env var MCL_SELECT_TOKEN (default: 'last'), and we ensure a prior
-          add_structure(PDBID="CODE") exists if a PDB code was referenced.
+        - By default we DO NOT rewrite select(...) into colon tokens (name: / id:).
+          For MolCommandNL we normalize selections to select(TOKEN) where TOKEN
+          can be 'last', 'all_xxxx', etc., and ensure that add_structure(PDBID="CODE")
+          has been issued for any referenced PDB code.
         """
         text = dsl_text or ""
 
@@ -525,7 +531,11 @@ class DSL(DSLInterface):
                 with open(_loaded_codes_path, "r") as f:
                     arr = json.load(f)
                 if isinstance(arr, list):
-                    return [c for c in arr if isinstance(c, str) and re.fullmatch(r"[0-9A-Za-z]{4}", c)]
+                    return [
+                        c for c in arr
+                        if isinstance(c, str)
+                        and re.fullmatch(r"[0-9A-Za-z]{4}", c)
+                    ]
             except Exception:
                 pass
             return []
@@ -544,20 +554,30 @@ class DSL(DSLInterface):
             new = []
             # add_structure(PDBID="CODE")
             for m in re.findall(
-                r'add_structure\(\s*PDBID\s*=\s*["\']([0-9A-Za-z]{4})["\']\s*\)', t, re.IGNORECASE
+                r'add_structure\(\s*PDBID\s*=\s*["\']([0-9A-Za-z]{4})["\']\s*\)',
+                t,
+                re.IGNORECASE,
             ):
                 c = m.lower()
                 if c not in seen:
                     new.append(c)
                     seen.add(c)
             # sel="all_CODE"
-            for m in re.findall(r'sel\s*=\s*["\']all_([0-9A-Za-z]{4})["\']', t, re.IGNORECASE):
+            for m in re.findall(
+                r'sel\s*=\s*["\']all_([0-9A-Za-z]{4})["\']',
+                t,
+                re.IGNORECASE,
+            ):
                 c = m.lower()
                 if c not in seen:
                     new.append(c)
                     seen.add(c)
             # select(all_CODE)
-            for m in re.findall(r'select\(\s*all_([0-9A-Za-z]{4})\s*\)', t, re.IGNORECASE):
+            for m in re.findall(
+                r'select\(\s*all_([0-9A-Za-z]{4})\s*\)',
+                t,
+                re.IGNORECASE,
+            ):
                 c = m.lower()
                 if c not in seen:
                     new.append(c)
@@ -565,15 +585,41 @@ class DSL(DSLInterface):
             if new:
                 _write_loaded_codes(prev + new)
 
-        # Track any codes mentioned in this DSL chunk before we start heavy rewrites
+        # Track any codes mentioned in this DSL chunk before heavy rewrites
         _update_loaded_codes_from_text(text)
+
+        # Also track PDB codes from the natural-language utterance, as a fallback.
+        # This lets things like "Load PDB ID 1kx2" register 1kx2 even if the DSL
+        # line isn't matched for some reason.
+        if utterance and isinstance(utterance, str):
+            # Only accept tokens that look like PDB IDs: digit + 3 alphanumerics
+            candidates = re.findall(r"\b([0-9][0-9A-Za-z]{3})\b", utterance)
+            if candidates:
+                prev = _read_loaded_codes()
+                seen = set(c.lower() for c in prev)
+                new = []
+                for c in candidates:
+                    lc = c.lower()
+                    if lc not in seen:
+                        new.append(lc)
+                        seen.add(lc)
+                if new:
+                    _write_loaded_codes(prev + new)
 
         # --- If select() references a PDB code, ensure we load it first (case-insensitive) ---
         def _pdb_from_select(t: str):
-            m = re.search(r'select\(\s*"?(?:name:)?([0-9A-Za-z]{4})"?\s*\)', t, re.IGNORECASE)
+            m = re.search(
+                r'select\(\s*"?(?:name:)?([0-9A-Za-z]{4})"?\s*\)',
+                t,
+                re.IGNORECASE,
+            )
             if m:
                 return m.group(1)
-            m = re.search(r"select\(\s*all_([0-9A-Za-z]{4})\s*\)", t, re.IGNORECASE)
+            m = re.search(
+                r"select\(\s*all_([0-9A-Za-z]{4})\s*\)",
+                t,
+                re.IGNORECASE,
+            )
             if m:
                 return m.group(1)
             m = re.search(
@@ -594,14 +640,19 @@ class DSL(DSLInterface):
 
         code = _pdb_from_select(text)
         if code and re.search(
-            rf'add_structure\(\s*PDBID\s*=\s*"{re.escape(code)}"\s*\)', text, re.IGNORECASE
+            rf'add_structure\(\s*PDBID\s*=\s*"{re.escape(code)}"\s*\)',
+            text,
+            re.IGNORECASE,
         ) is None:
             text = f'add_structure(PDBID="{code}")\n' + text
 
-        # --- SELECT named-args → positional QUERY token (still intermediate) ---
+        # --- SELECT named-args → positional QUERY token (intermediate form) ---
         def _strip_quotes(s: str) -> str:
             s = s.strip()
-            if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+            if (
+                (s.startswith('"') and s.endswith('"')) or
+                (s.startswith("'") and s.endswith("'"))
+            ):
                 return s[1:-1]
             return s
 
@@ -610,7 +661,10 @@ class DSL(DSLInterface):
             # Parse simple k=v pairs (string or bare)
             kv = dict(
                 (k.strip(), _strip_quotes(v))
-                for k, v in re.findall(r'(\w+)\s*=\s*(".*?"|\'.*?\'|[^,)\s]+)', inside)
+                for k, v in re.findall(
+                    r'(\w+)\s*=\s*(".*?"|\'.*?\'|[^,)\s]+)',
+                    inside,
+                )
             )
 
             # Helper: detect 4-char code and "all_<code>" (case-insensitive)
@@ -626,7 +680,11 @@ class DSL(DSLInterface):
 
             # 1) If query already is all_<code>, use it directly (case-insensitive)
             q = kv.get("query")
-            if isinstance(q, str) and re.fullmatch(r"all_[0-9a-zA-Z]{4}", q, re.IGNORECASE):
+            if isinstance(q, str) and re.fullmatch(
+                r"all_[0-9a-zA-Z]{4}",
+                q,
+                re.IGNORECASE,
+            ):
                 return f"select({q})"
 
             # 2) query == "all" + 4-char name → all_<code>
@@ -658,10 +716,8 @@ class DSL(DSLInterface):
 
         text = re.sub(r"\bselect\(\s*([^)]+)\)", _select_rewrite, text)
 
-        # --- Normalize any specialized select(...) to a validator token ---
+        # --- Normalize empty select(...) early ---
         sel_token = os.environ.get("MCL_SELECT_TOKEN", "last")
-
-        # NEW: Always normalize empty-selects early to avoid validator errors
         text = re.sub(r"\bselect\(\s*\)", f"select({sel_token})", text)
 
         # quoted colon form → select(TOKEN)
@@ -676,15 +732,22 @@ class DSL(DSLInterface):
             lambda _: f"select({sel_token})",
             text,
         )
-        # NOTE: we intentionally DO NOT rewrite select(all_CODE) here so the validator sees all_<code>.
 
         # Just in case: strip quotes around last/all
         text = re.sub(r'select\(\s*"(last|all)"\s*\)', r"select(\1)", text)
 
         # Optional colon-style rewrite (disabled by default; kept for completeness)
         if os.environ.get("MCL_ENABLE_COLON_SELECT", "0") == "1":
-            text = re.sub(r'select\(\s*"id:([^"]+)"\s*\)', r'select("id:\1")', text)
-            text = re.sub(r'select\(\s*"name:([^"]+)"\s*\)', r'select("name:\1")', text)
+            text = re.sub(
+                r'select\(\s*"id:([^"]+)"\s*\)',
+                r'select("id:\1")',
+                text,
+            )
+            text = re.sub(
+                r'select\(\s*"name:([^"]+)"\s*\)',
+                r'select("name:\1")',
+                text,
+            )
             text = re.sub(
                 r'select\(\s*name\s*=\s*["\']([^"\']+)["\']\s*\)',
                 r'select("name:\1")',
@@ -705,10 +768,8 @@ class DSL(DSLInterface):
                 r'select("name:\1")',
                 text,
             )
-            # No extra empty-select handler here; we already normalized above.
 
-        # If a call uses sel="XXXX" (4-char PDB code), create a selection first and
-        # rewrite sel to "all_xxxx".
+        # --- Inject select(...) before show/hide/color_by_chain when sel="CODE" (4 letters) ---
         def _inject_select_for_show_like(txt: str) -> str:
             import re as _re
 
@@ -725,37 +786,74 @@ class DSL(DSLInterface):
                 return f"select({token4})\n" + call
 
             pattern = _re.compile(
-                r'(?P<func>show|hide|color_by_chain)\(\s*sel\s*=\s*"(?P<code>[0-9A-Za-z]{4})"\s*(?P<rest>,[^)]*)?\)',
+                r'(?P<func>show|hide|color_by_chain)\('
+                r'\s*sel\s*=\s*"(?P<code>[0-9A-Za-z]{4})"\s*(?P<rest>,[^)]*)?\)',
                 _re.IGNORECASE,
             )
             return _re.sub(pattern, repl, txt)
 
         text = _inject_select_for_show_like(text)
 
-        # HIDE everything → hide(all)
-        text = re.sub(r'hide\(\s*scope\s*=\s*["\']all["\']\s*\)', "hide(all)", text)
+        # --- HIDE everything → hide(all) normalization ---
+        text = re.sub(
+            r'hide\(\s*scope\s*=\s*["\']all["\']\s*\)',
+            "hide(all)",
+            text,
+        )
         text = re.sub(r'hide\(\s*["\']all["\']\s*\)', "hide(all)", text)
         text = re.sub(r"\bhide\(\s*\)", "hide(all)", text)
 
-      # Expand global hide to one hide per loaded PDB (e.g., hide(sel="all_1crn"))
+        # --- Expand global hide(all) to per-PDB hides ---
         if re.search(r"\bhide\(\s*all\s*\)", text, re.IGNORECASE):
             _codes = _read_loaded_codes()
             if _codes:
-                expansion = "\n".join([f'hide(sel="all_{c}")' for c in _codes])
-                text = re.sub(r"\bhide\(\s*all\s*\)", expansion, text, flags=re.IGNORECASE)
+                expansion = "\n".join(f'hide(sel="all_{c}")' for c in _codes)
+                text = re.sub(
+                    r"\bhide\(\s*all\s*\)",
+                    expansion,
+                    text,
+                    flags=re.IGNORECASE,
+                )
 
-        # --- After all rewrites: optionally strip select(...) when we've just loaded a PDB ---
-        # If MCL_STRIP_SELECT=1 (default), remove select(...) lines when an add_structure(...) is present.
+        # --- Special case: utterance literally says "hide everything" ---
+        # Ensure *all* loaded PDB codes are hidden, even if the bank sample only
+        # mentions one (e.g., hide(sel="all_1kx2")).
+        if utterance and isinstance(utterance, str) and "everything" in utterance.lower():
+            _codes = _read_loaded_codes()
+            if _codes:
+                # Which PDB codes are already being hidden in this DSL?
+                present = set(
+                    c.lower()
+                    for c in re.findall(
+                        r'hide\(\s*sel\s*=\s*"all_([0-9A-Za-z]{4})"\s*\)',
+                        text,
+                        re.IGNORECASE,
+                    )
+                )
+                missing = [c for c in _codes if c.lower() not in present]
+                if missing:
+                    extra = "\n".join(f'hide(sel="all_{c}")' for c in missing)
+                    if text and not text.endswith("\n"):
+                        text += "\n"
+                    text += extra
+
+        # --- Optionally strip select(...) when we just loaded a PDB ---
         if os.environ.get("MCL_STRIP_SELECT", "1") == "1":
             lines = [ln for ln in (text.splitlines() or []) if ln.strip()]
-            has_add = any(re.match(r"\s*add_structure\(", ln, re.IGNORECASE) for ln in lines)
+
+            has_add = any(
+                re.match(r"\s*add_structure\(", ln, re.IGNORECASE)
+                for ln in lines
+            )
             if has_add:
-                # Drop any select(...) lines (case-insensitive) — validator currently rejects them.
-                lines = [ln for ln in lines if not re.match(r"\s*select\s*\(", ln, re.IGNORECASE)]
+                # Drop any select(...) lines — validator currently rejects them.
+                lines = [
+                    ln for ln in lines
+                    if not re.match(r"\s*select\s*\(", ln, re.IGNORECASE)
+                ]
             text = "\n".join(lines)
 
-
-        # Representation/Coloring enums as bare tokens
+        # --- Representation/Coloring enums as bare token---
         text = re.sub(
             r'update_representation\(\s*type\s*=\s*["\']([^"\']+)["\']\s*\)',
             r"update_representation(\1)",
