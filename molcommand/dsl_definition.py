@@ -464,7 +464,6 @@ class DSL(DSLInterface):
                     args["rep"] = "lines"
 
         # --- SHOW/HIDE/COLOR_BY_CHAIN normalization ---
-        # Accept four-letter PDB codes in sel and make them real selection tokens (all_<code>).
         if stmt in ("show", "hide", "color_by_chain"):
 
             def _sel_token(v):
@@ -474,10 +473,27 @@ class DSL(DSLInterface):
 
             if "sel" in args:
                 args["sel"] = _sel_token(args["sel"])
+
             if stmt == "show":
+                # Default representation if none is provided
                 args.setdefault("rep", "cartoon")
+
             if stmt == "color_by_chain":
+                # Default target if none is provided
                 args.setdefault("target", "cartoon")
+
+                # For color_by_chain, accept 'rep=' as a synonym for 'target='
+                if "rep" in args and "target" not in args:
+                    args["target"] = args.pop("rep")
+
+                # Drop any unknown kwargs (e.g. color="red") so the validator grammar
+                # only sees the arguments it knows about.
+                allowed_keys = {"sel", "target"}
+                for k in list(args.keys()):
+                    if k not in allowed_keys:
+                        del args[k]
+
+
 
         # --- ADD_STRUCTURE normalization ---
         if stmt == "add_structure":
