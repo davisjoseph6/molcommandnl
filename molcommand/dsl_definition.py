@@ -409,8 +409,11 @@ class DSL(DSLInterface):
                 print(f"[INFO] Dropping select(...) with invalid keys: {invalid}")
                 return None
 
-            pdb = args.pop("structureName", None) or args.pop("pdb", None) or \
-                args.pop("PDB", None)
+            pdb = (
+                args.pop("structureName", None)
+                or args.pop("pdb", None)
+                or args.pop("PDB", None)
+            )
             nm = args.get("name")
 
             # If user passed a 4-char code, normalize to all_<code>
@@ -493,16 +496,47 @@ class DSL(DSLInterface):
                     if k not in allowed_keys:
                         del args[k]
 
-
-
         # --- ADD_STRUCTURE normalization ---
         if stmt == "add_structure":
+            # Map common keys to PDBID when they look like 4-char codes
             for k in ("name", "pdb", "pdbid", "PDB", "id"):
                 if k in args and "PDBID" not in args:
                     val = str(args[k]).strip()
-                    if re.fullmatch(r"[0-9a-zA-Z]{4}", val):
+                    if re.fullmatch(r"[0-9A-Za-z]{4}", val):
                         args["PDBID"] = args.pop(k)
                         break
+
+            # Normalize filePath while preserving case and try to fix
+            # case-only mismatches when the filesystem is case-sensitive.
+            fp = args.get("filePath")
+            if isinstance(fp, str):
+                path = fp.strip()
+                # Expand ~ and environment variables, but DO NOT change case.
+                path = os.path.expanduser(os.path.expandvars(path))
+
+                try:
+                    if not os.path.exists(path):
+                        # Best-effort case-insensitive correction on the basename.
+                        dirname = os.path.dirname(path) or "."
+                        basename = os.path.basename(path)
+                        if basename and os.path.isdir(dirname):
+                            try:
+                                entries = os.listdir(dirname)
+                            except OSError:
+                                entries = []
+                            matches = [
+                                entry
+                                for entry in entries
+                                if entry.lower() == basename.lower()
+                            ]
+                            if len(matches) == 1:
+                                # Use the actual on-disk name
+                                path = os.path.join(dirname, matches[0])
+                except Exception:
+                    # Any error → keep original path; this is only a convenience layer.
+                    pass
+
+                args["filePath"] = path
 
         # Clamp Office numeric fields
         for key in ("fillTransparency", "lineTransparency"):
@@ -510,7 +544,7 @@ class DSL(DSLInterface):
                 args[key] = max(0.0, min(1.0, args[key]))
 
         node["args"] = args
-        return node
+        return node        
 
     # --------------------------
     # Chroma collection name
