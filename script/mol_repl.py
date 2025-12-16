@@ -69,6 +69,37 @@ def repair_llm_dsl(s: str) -> str:
     return s
 
 
+def repair_color_by_chain_defaults(dsl_text: str, last_all_sel: str) -> str:
+    """
+    Repair common LLM slip where it emits only a sel, and encodes the rep in the sel:
+
+      color_by_chain(sel="all_cartoon") -> color_by_chain(sel="<last_all_sel>", target="cartoon")
+      color_by_chain(sel="cartoon")     -> color_by_chain(sel="<last_all_sel>", target="cartoon")
+      color_by_chain(sel="all_lines")   -> ... target="lines"
+
+    If we can't confidently infer the target, we leave it unchanged.
+    """
+    dsl_text = cleaned(dsl_text)
+    m = re.fullmatch(r'color_by_chain\(\s*sel\s*=\s*"([^"]+)"\s*\)', dsl_text)
+    if not m:
+        return dsl_text
+
+    raw_sel = m.group(1).strip().lower()
+    reps = ("cartoon", "lines", "spheres", "surface")
+
+    target = None
+    if raw_sel in reps:
+        target = raw_sel
+    elif raw_sel.startswith("all_") and raw_sel[4:] in reps:
+        target = raw_sel[4:]
+
+    if not target:
+        return dsl_text
+
+    sel = last_all_sel or "all"
+    return f'color_by_chain(sel="{sel}", target="{target}")'
+
+
 async def run_repl(entity_hint=None, with_context=False):
     # Only for operator visibility; SemanticInterpreter picks the actual path.
     chroma_dir = (
@@ -92,6 +123,10 @@ async def run_repl(entity_hint=None, with_context=False):
 
     # Prefer selecting by concrete object id once we know it (optional via env)
     id_map: dict[str, str] = {}
+
+    # Track "most recent structure selection" for generic ops.
+    # Falls back to "all" (executor ensures it exists after add_structure).
+    last_all_sel = "all"
 
     def prefer_object_id(dsl_text: str) -> str:
         # replace select(name:XXXX) or select("name:XXXX") with select(id:OBJID) if known
@@ -145,6 +180,9 @@ async def run_repl(entity_hint=None, with_context=False):
         # Repair common LLM formatting mistakes (parenthesized / space-arg forms)
         dsl_prog = repair_llm_dsl(dsl_prog)
 
+        # Repair color_by_chain missing target (e.g., sel="all_cartoon")
+        dsl_prog = repair_color_by_chain_defaults(dsl_prog, last_all_sel)
+
         # OPTIONAL: prefer selecting by concrete object id when allowed
         if os.environ.get("MCL_PREFER_OBJECT_ID") == "1":
             dsl_prog = prefer_object_id(dsl_prog)
@@ -165,6 +203,15 @@ async def run_repl(entity_hint=None, with_context=False):
             obj = out.get("result")
             if isinstance(obj, str):
                 id_map[m_pdb.group(1).lower()] = obj
+                # If executor returns an all_<code> selection, use it for generic followups.
+                if obj.startswith("all_"):
+                    last_all_sel = obj
+
+        # Also handle filePath case when executor returns all_<stem>
+        if dsl_prog.startswith("add_structure") and isinstance(out, dict):
+            obj = out.get("result")
+            if isinstance(obj, str) and obj.startswith("all_"):
+                last_all_sel = obj
 
 
 def main():
