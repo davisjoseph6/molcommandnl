@@ -470,31 +470,22 @@ class DSL(DSLInterface):
         if stmt in ("show", "hide", "color_by_chain"):
 
             def _sel_token(v):
-                if isinstance(v, str) and re.fullmatch(r"[0-9A-Za-z]{4}", v):
-                    return "all_" + v.lower()
-                return v
+                if not isinstance(v, str):
+                    return v
+                vv = v.strip()
+                if not vv:
+                    return v
+                # already a concrete selection name
+                if vv.lower().startswith("all_"):
+                    return vv.lower()
+                # only treat real PDB IDs as structure codes (1crn, 3eam, ...)
+                if re.fullmatch(r"[0-9][A-Za-z0-9]{3}", vv):
+                    return "all_" + vv.lower()
+                return vv
 
             if "sel" in args:
                 args["sel"] = _sel_token(args["sel"])
 
-            if stmt == "show":
-                # Default representation if none is provided
-                args.setdefault("rep", "cartoon")
-
-            if stmt == "color_by_chain":
-                # Default target if none is provided
-                args.setdefault("target", "cartoon")
-
-                # For color_by_chain, accept 'rep=' as a synonym for 'target='
-                if "rep" in args and "target" not in args:
-                    args["target"] = args.pop("rep")
-
-                # Drop any unknown kwargs (e.g. color="red") so the validator grammar
-                # only sees the arguments it knows about.
-                allowed_keys = {"sel", "target"}
-                for k in list(args.keys()):
-                    if k not in allowed_keys:
-                        del args[k]
 
         # --- ADD_STRUCTURE normalization ---
         if stmt == "add_structure":
@@ -502,7 +493,7 @@ class DSL(DSLInterface):
             for k in ("name", "pdb", "pdbid", "PDB", "id"):
                 if k in args and "PDBID" not in args:
                     val = str(args[k]).strip()
-                    if re.fullmatch(r"[0-9A-Za-z]{4}", val):
+                    if re.fullmatch(r"[0-9][A-Za-z0-9]{3}", val):
                         args["PDBID"] = args.pop(k)
                         break
 
