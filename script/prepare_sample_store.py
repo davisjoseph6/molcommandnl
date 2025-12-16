@@ -1,5 +1,10 @@
 # prepare_sample_store.py
 
+
+"""Build/refresh the Chroma vector store from samples.yaml for a given DSL.
+Fixes path joining bugs and supports upsert so updates propagate without reset.
+"""
+
 import argparse
 import os
 import shutil
@@ -102,38 +107,22 @@ class SampleStoreBuilder:
                 "utterance": s["utterance"],
                 "sub_samples": serialized_ss
             })
-
-        # Filter out existing
-        existing = self.collection.get(include=[])
-        existing_ids = set(existing["ids"])
-        print(f"📦 Existing samples in collection '{self.collection_name}': {len(existing_ids)}")
-
-        new_samples = [(i, texts[i], metas[i]) for i in range(len(samples)) if ids[i] not in existing_ids]
-
-        if new_samples:
-            print(f"👉 Adding new samples: {len(new_samples)}")
-            new_ids = [ids[i] for i, _, _ in new_samples]
-            new_texts = [text for _, text, _ in new_samples]
-            new_metas = [meta for _, _, meta in new_samples]
-            new_embeddings = [self.embed_model.embed_query(text) for text in new_texts]
-
-            print(f"📝 Attempting to add {len(new_ids)} samples to collection {self.collection_name}")
-            print(f"📄 First sample ID: {new_ids[0]}")
-
-            try:
-                self.collection.add(
-                    ids=new_ids,
-                    documents=new_texts,
-                    metadatas=new_metas,
-                    embeddings=new_embeddings
-                )
-            except Exception as e:
-                print(f"❌ Failed to add samples: {e}")
-                import traceback
-                traceback.print_exc()
-
-        else:
-            print("✅ No new samples to add.")
+        # Always UPSERT in dev so edits to an existing sample get applied (same ID).
+        embeddings = [self.embed_model.embed_query(text) for text in texts]
+        print(f"📝 Upserting {len(ids)} samples into collection {self.collection_name}")
+        if ids:
+            print(f"📄 First sample ID: {ids[0]}")
+        try:
+            self.collection.upsert(
+                ids=ids,
+                documents=texts,
+                metadatas=metas,
+                embeddings=embeddings
+            )
+        except Exception as e:
+            print(f"❌ Failed to upsert samples: {e}")
+            import traceback
+            traceback.print_exc()
 
     def reset_store(self):
         if os.path.exists(self.chroma_path):
@@ -147,6 +136,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dsl", type=str, required=True, help="DSL name (e.g., odsl, markdown)")
     parser.add_argument("--reset", action="store_true", help="Reset the vector store.")
+    parser.add_argument("--chroma-dir", type=str, default=None, help="Override Chroma directory.")
+    parser.add_argument("--samples", type=str, default=None, help="Override samples.yaml path.")
     args = parser.parse_args()
 
     dsl = args.dsl
@@ -166,10 +157,19 @@ def main():
 
     CHROMAPATH = config.get('CHROMAPATH')
     print(f"🔧 Config says CHROMAPATH = {CHROMAPATH}")
-    chroma_path = CHROMAPATH + dsl + "/"
 
-    data_path = config.get(dsl)
-    data_path = data_path + "/samples.yaml"
+    # Priority: CLI override > MOLCOMMANDNL_CHROMA_DIR > config CHROMAPATH/<dsl>
+    if args.chroma_dir:
+        chroma_path = str(Path(args.chroma_dir).expanduser())
+    elif os.environ.get("MOLCOMMANDNL_CHROMA_DIR"):
+        chroma_path = str(Path(os.environ["MOLCOMMANDNL_CHROMA_DIR"]).expanduser())
+    else:
+        chroma_path = str(Path(CHROMAPATH).expanduser() / dsl)
+
+    if args.samples:
+        data_path = args.samples
+    else:
+        data_path = str(Path(config.get(dsl)) / "samples.yaml")
 
     collection_name = f"{dsl}_samples"
 
