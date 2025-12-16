@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-import os, sys, asyncio, json, argparse, re
+import os
+import sys
+import asyncio
+import json
+import argparse
+import re
 from importlib import import_module
 
 HERE = os.path.dirname(__file__)
@@ -8,11 +13,11 @@ sys.path.append(HERE)   # semantic_interpreter.py
 sys.path.append(ROOT)   # repo root
 
 # --- interpreter + LLM shim ---
-from semantic_interpreter import SemanticInterpreter, LLMClient
+from semantic_interpreter import SemanticInterpreter, LLMClient  # noqa: E402
 
 # --- unitymol_copilot tools (validate/execute) ---
 sys.path.append(os.path.expanduser('~/unitymol_copilot'))
-from mcp_server import validate_dsl, execute_dsl
+from mcp_server import validate_dsl, execute_dsl  # noqa: E402
 
 
 def load_mol_dsl():
@@ -30,7 +35,38 @@ def load_mol_dsl():
 
 
 def cleaned(s: str) -> str:
+    """Trim whitespace safely."""
     return (s or "").strip()
+
+
+def repair_llm_dsl(s: str) -> str:
+    """
+    Repair minor formatting mistakes in LLM output so it matches the strict DSL grammar.
+
+    Fixes:
+      1) (show sel="...", rep="...")  -> show(sel="...", rep="...")
+      2) show sel="..." rep="..."     -> show(sel="...", rep="...")
+    """
+    s = cleaned(s)
+    if not s:
+        return s
+
+    # Case 1: (show sel="...", rep="...")  -> show(sel="...", rep="...")
+    m = re.match(r'^\(\s*([A-Za-z_][A-Za-z0-9_]*)\s+(.*)\)\s*$', s, flags=re.S)
+    if m:
+        fn, inner = m.group(1), m.group(2).strip()
+        # Insert commas between key/value pairs when the LLM uses spaces.
+        inner = re.sub(r'"\s+([A-Za-z_][A-Za-z0-9_]*\s*=)', r'", \1', inner)
+        return f"{fn}({inner})"
+
+    # Case 2: show sel="..." rep="..." -> show(sel="...", rep="...")
+    m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)\s+(.+)$', s, flags=re.S)
+    if m and "(" not in s and "=" in s:
+        fn, inner = m.group(1), m.group(2).strip()
+        inner = re.sub(r'"\s+([A-Za-z_][A-Za-z0-9_]*\s*=)', r'", \1', inner)
+        return f"{fn}({inner})"
+
+    return s
 
 
 async def run_repl(entity_hint=None, with_context=False):
@@ -63,10 +99,12 @@ async def run_repl(entity_hint=None, with_context=False):
             code = m.group(1).lower()
             obj = id_map.get(code)
             return f'select(id:{obj})' if obj else m.group(0)
+
         def _r_id_quoted(m):
             code = m.group(1).lower()
             obj = id_map.get(code)
             return f'select(id:{obj})' if obj else m.group(0)
+
         dsl_text = re.sub(r'select\(name:([0-9A-Za-z]{4})\)', _r_id_unquoted, dsl_text)
         dsl_text = re.sub(r'select\("name:([0-9A-Za-z]{4})"\)', _r_id_quoted, dsl_text)
         return dsl_text
@@ -77,6 +115,7 @@ async def run_repl(entity_hint=None, with_context=False):
         except (EOFError, KeyboardInterrupt):
             print()
             break
+
         if q.lower() in ("quit", "exit"):
             break
         if not q:
@@ -103,6 +142,9 @@ async def run_repl(entity_hint=None, with_context=False):
             print("No DSL produced.")
             continue
 
+        # Repair common LLM formatting mistakes (parenthesized / space-arg forms)
+        dsl_prog = repair_llm_dsl(dsl_prog)
+
         # OPTIONAL: prefer selecting by concrete object id when allowed
         if os.environ.get("MCL_PREFER_OBJECT_ID") == "1":
             dsl_prog = prefer_object_id(dsl_prog)
@@ -127,10 +169,16 @@ async def run_repl(entity_hint=None, with_context=False):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--entity", default=None,
-                    help="Optional entity hint (e.g. 'structure', 'selection', 'representation').")
-    ap.add_argument("--with-context", action="store_true",
-                    help="Use a tiny demo context object.")
+    ap.add_argument(
+        "--entity",
+        default=None,
+        help="Optional entity hint (e.g. 'structure', 'selection', 'representation').",
+    )
+    ap.add_argument(
+        "--with-context",
+        action="store_true",
+        help="Use a tiny demo context object.",
+    )
     args = ap.parse_args()
     asyncio.run(run_repl(entity_hint=args.entity, with_context=args.with_context))
 
