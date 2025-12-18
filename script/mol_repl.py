@@ -1,4 +1,20 @@
 #!/usr/bin/env python3
+"""
+molcommandnl.script.mol_repl
+
+Interactive REPL: NL -> DSL -> validate -> execute via unitymol_copilot.
+Includes small repairs for common LLM formatting slips.
+
+Dev QoL:
+- Repair common LLM formatting mistakes ((show ...) or space-arg forms).
+- Repair color_by_chain(sel="all_cartoon") missing target.
+- Rewrite generic sel="all" into the last loaded structure selection (all_<code>).
+- Persist last_all_sel across REPL runs (repl_state.json) so structure -> representation
+  works even when run in separate REPL processes.
+"""
+
+from pathlib import Path
+
 import os
 import sys
 import asyncio
@@ -16,7 +32,7 @@ sys.path.append(ROOT)   # repo root
 from semantic_interpreter import SemanticInterpreter, LLMClient  # noqa: E402
 
 # --- unitymol_copilot tools (validate/execute) ---
-sys.path.append(os.path.expanduser('~/unitymol_copilot'))
+sys.path.append(os.path.expanduser("~/unitymol_copilot"))
 from mcp_server import validate_dsl, execute_dsl  # noqa: E402
 
 
@@ -25,9 +41,16 @@ def load_mol_dsl():
     Load your molcommand DSL object/factory from molcommand/dsl_definition.py.
     Tries several common names so we’re robust to refactors.
     """
-    mod = import_module('molcommand.dsl_definition')
-    for name in ('build_dsl', 'make_dsl', 'create_dsl', 'load_dsl',
-                 'MolCommandDSL', 'DSL', 'dsl'):
+    mod = import_module("molcommand.dsl_definition")
+    for name in (
+        "build_dsl",
+        "make_dsl",
+        "create_dsl",
+        "load_dsl",
+        "MolCommandDSL",
+        "DSL",
+        "dsl",
+    ):
         if hasattr(mod, name):
             obj = getattr(mod, name)
             return obj() if callable(obj) else obj
@@ -37,6 +60,39 @@ def load_mol_dsl():
 def cleaned(s: str) -> str:
     """Trim whitespace safely."""
     return (s or "").strip()
+
+
+def _state_file(chroma_dir: str) -> Path:
+    """
+    Determine where to store REPL state.
+
+    Priority:
+      1) MOLCOMMANDNL_REPL_STATE_FILE (explicit)
+      2) <chroma_dir>/repl_state.json
+    """
+    override = os.environ.get("MOLCOMMANDNL_REPL_STATE_FILE")
+    if override:
+        return Path(override).expanduser()
+    return Path(chroma_dir).expanduser() / "repl_state.json"
+
+
+def load_repl_state(chroma_dir: str) -> dict:
+    """Load persisted REPL state (best-effort)."""
+    path = _state_file(chroma_dir)
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_repl_state(chroma_dir: str, state: dict) -> None:
+    """Persist REPL state (best-effort, never hard-fails)."""
+    path = _state_file(chroma_dir)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def repair_llm_dsl(s: str) -> str:
@@ -52,7 +108,7 @@ def repair_llm_dsl(s: str) -> str:
         return s
 
     # Case 1: (show sel="...", rep="...")  -> show(sel="...", rep="...")
-    m = re.match(r'^\(\s*([A-Za-z_][A-Za-z0-9_]*)\s+(.*)\)\s*$', s, flags=re.S)
+    m = re.match(r"^\(\s*([A-Za-z_][A-Za-z0-9_]*)\s+(.*)\)\s*$", s, flags=re.S)
     if m:
         fn, inner = m.group(1), m.group(2).strip()
         # Insert commas between key/value pairs when the LLM uses spaces.
@@ -60,7 +116,7 @@ def repair_llm_dsl(s: str) -> str:
         return f"{fn}({inner})"
 
     # Case 2: show sel="..." rep="..." -> show(sel="...", rep="...")
-    m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)\s+(.+)$', s, flags=re.S)
+    m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s+(.+)$", s, flags=re.S)
     if m and "(" not in s and "=" in s:
         fn, inner = m.group(1), m.group(2).strip()
         inner = re.sub(r'"\s+([A-Za-z_][A-Za-z0-9_]*\s*=)', r'", \1', inner)
@@ -100,6 +156,38 @@ def repair_color_by_chain_defaults(dsl_text: str, last_all_sel: str) -> str:
     return f'color_by_chain(sel="{sel}", target="{target}")'
 
 
+def repair_sel_all_to_last(dsl_text: str, last_all_sel: str) -> str:
+    """
+    If DSL uses sel="all" (common in generic samples), rewrite it to the most
+    recently created selection like all_1crn.
+    """
+    if not last_all_sel or last_all_sel == "all":
+        return dsl_text
+
+    # show(sel="all", rep="...")
+    dsl_text = re.sub(
+        r'show\(\s*sel\s*=\s*"all"\s*,',
+        f'show(sel="{last_all_sel}",',
+        dsl_text,
+    )
+
+    # hide(sel="all")
+    dsl_text = re.sub(
+        r'hide\(\s*sel\s*=\s*"all"\s*\)',
+        f'hide(sel="{last_all_sel}")',
+        dsl_text,
+    )
+
+    # color_by_chain(sel="all", target="...")
+    dsl_text = re.sub(
+        r'color_by_chain\(\s*sel\s*=\s*"all"\s*,',
+        f'color_by_chain(sel="{last_all_sel}",',
+        dsl_text,
+    )
+
+    return dsl_text
+
+
 async def run_repl(entity_hint=None, with_context=False):
     # Only for operator visibility; SemanticInterpreter picks the actual path.
     chroma_dir = (
@@ -118,29 +206,29 @@ async def run_repl(entity_hint=None, with_context=False):
 
     dsl_spec = load_mol_dsl()
     si = SemanticInterpreter(dsl_spec, LLMClient())
-
     context = {"id": "scene1", "_type": "unitymol_scene"} if with_context else None
 
     # Prefer selecting by concrete object id once we know it (optional via env)
     id_map: dict[str, str] = {}
 
     # Track "most recent structure selection" for generic ops.
-    # Falls back to "all" (executor ensures it exists after add_structure).
-    last_all_sel = "all"
+    # Falls back to "all" (UnityMol keyword), until we load a structure and get all_<code>.
+    state = load_repl_state(chroma_dir)
+    last_all_sel = state.get("last_all_sel", "all")
 
     def prefer_object_id(dsl_text: str) -> str:
         # replace select(name:XXXX) or select("name:XXXX") with select(id:OBJID) if known
         def _r_id_unquoted(m):
             code = m.group(1).lower()
             obj = id_map.get(code)
-            return f'select(id:{obj})' if obj else m.group(0)
+            return f"select(id:{obj})" if obj else m.group(0)
 
         def _r_id_quoted(m):
             code = m.group(1).lower()
             obj = id_map.get(code)
-            return f'select(id:{obj})' if obj else m.group(0)
+            return f"select(id:{obj})" if obj else m.group(0)
 
-        dsl_text = re.sub(r'select\(name:([0-9A-Za-z]{4})\)', _r_id_unquoted, dsl_text)
+        dsl_text = re.sub(r"select\(name:([0-9A-Za-z]{4})\)", _r_id_unquoted, dsl_text)
         dsl_text = re.sub(r'select\("name:([0-9A-Za-z]{4})"\)', _r_id_quoted, dsl_text)
         return dsl_text
 
@@ -180,6 +268,9 @@ async def run_repl(entity_hint=None, with_context=False):
         # Repair common LLM formatting mistakes (parenthesized / space-arg forms)
         dsl_prog = repair_llm_dsl(dsl_prog)
 
+        # Rewrite sel="all" -> sel="all_XXXX" once we have a loaded structure
+        dsl_prog = repair_sel_all_to_last(dsl_prog, last_all_sel)
+
         # Repair color_by_chain missing target (e.g., sel="all_cartoon")
         dsl_prog = repair_color_by_chain_defaults(dsl_prog, last_all_sel)
 
@@ -206,12 +297,14 @@ async def run_repl(entity_hint=None, with_context=False):
                 # If executor returns an all_<code> selection, use it for generic followups.
                 if obj.startswith("all_"):
                     last_all_sel = obj
+                    save_repl_state(chroma_dir, {"last_all_sel": last_all_sel})
 
         # Also handle filePath case when executor returns all_<stem>
         if dsl_prog.startswith("add_structure") and isinstance(out, dict):
             obj = out.get("result")
             if isinstance(obj, str) and obj.startswith("all_"):
                 last_all_sel = obj
+                save_repl_state(chroma_dir, {"last_all_sel": last_all_sel})
 
 
 def main():
