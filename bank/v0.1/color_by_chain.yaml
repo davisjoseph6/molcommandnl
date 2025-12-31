@@ -4,7 +4,35 @@ verb: color_by_chain
 items:
   - id: color-by-chain-cartoon
     utterance: "Color the cartoon by chain"
-    dsl: 'color_by_chain(sel="all_1kx2", target="cartoon")'
+    dsl: 'color_by_chain(sel="all", target="cartoon")'
+    entities: ["representation"]
+    context: null
+    tags: ["color", "chain"]
+
+  - id: color-by-chain-line
+    utterance: "Color the lines by chain"
+    dsl: 'color_by_chain(sel="all", target="line")'
+    entities: ["representation"]
+    context: null
+    tags: ["color", "chain"]
+
+  - id: color-by-chain-surface
+    utterance: "Color the surface by chain"
+    dsl: 'color_by_chain(sel="all", target="surface")'
+    entities: ["representation"]
+    context: null
+    tags: ["color", "chain"]
+
+  - id: color-by-chain-tube
+    utterance: "Color the tube by chain"
+    dsl: 'color_by_chain(sel="all", target="tube")'
+    entities: ["representation"]
+    context: null
+    tags: ["color", "chain"]
+
+  - id: color-by-chain-atom
+    utterance: "Color atoms by chain"
+    dsl: 'color_by_chain(sel="all", target="atom")'
     entities: ["representation"]
     context: null
     tags: ["color", "chain"]
@@ -22,5 +50,4 @@ items:
     entities: ["representation"]
     context: null
     tags: ["color", "chain"]
-
 
