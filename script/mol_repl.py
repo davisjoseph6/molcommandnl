@@ -13,12 +13,23 @@ Option A behavior:
   because the normalizer intentionally defaults to sel="all" when inferring targets,
   and only the REPL knows what the last focused structure is.
 
+DEV-LOOSE behavior (MOLCOMMANDNL_DEV_LOOSE=1):
+- Never hard-stop a turn due to validator errors.
+- Salvage by validating each line independently, dropping invalid ones.
+- Avoid "No selection named ..." by:
+    * auto-prepending add_structure(PDBID="<code>") when the user *explicitly*
+      mentioned <code> in the NL query and we reference all_<code> in DSL.
+    * dropping hide/show lines that refer to selections we don't know exist.
+
 Other:
-- Persist last_all_sel across REPL runs (repl_state.json).
+- Persist last_all_sel and known selections across REPL runs (repl_state.json).
 - Pre-rewrite common shorthand NL like "load 1crn" -> "Load PDB ID 1crn"
 """
 
+from __future__ import annotations
+
 from pathlib import Path
+from importlib import import_module
 
 import os
 import sys
@@ -26,12 +37,29 @@ import asyncio
 import json
 import argparse
 import re
-from importlib import import_module
+import logging
+
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMADB_TELEMETRY"] = "0"
+os.environ["CHROMA_TELEMETRY"] = "False"
+
+# Silence chromadb loggers hard
+for name in (
+    "chromadb",
+    "chromadb.api.segment",
+    "chromadb.telemetry.product.posthog",
+    "chromadb.telemetry",
+):
+    lg = logging.getLogger(name)
+    lg.setLevel(logging.CRITICAL)
+    lg.propagate = False
 
 HERE = os.path.dirname(__file__)
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 sys.path.append(HERE)   # semantic_interpreter.py
 sys.path.append(ROOT)   # repo root
+
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "FALSE")
 
 # --- interpreter + LLM shim ---
 from semantic_interpreter import SemanticInterpreter, LLMClient  # noqa: E402
@@ -39,6 +67,13 @@ from semantic_interpreter import SemanticInterpreter, LLMClient  # noqa: E402
 # --- unitymol_copilot tools (validate/execute + DEV normalizer) ---
 sys.path.append(os.path.expanduser("~/unitymol_copilot"))
 from mcp_server import validate_dsl, execute_dsl  # noqa: E402
+
+#for name in (
+#    "chromadb",
+#    "chromadb.api.segment",
+#    "chromadb.telemetry.product.posthog",
+#):
+#    logging.getLogger(name).setLevel(logging.ERROR)
 
 try:
     # Available in unitymol_copilot/
@@ -164,6 +199,131 @@ def maybe_focus_last_all_sel_from_program(dsl_prog: str) -> str | None:
     return None
 
 
+def repair_common_arg_mistakes(dsl_text: str) -> str:
+    """
+    Fix common DEV-normalizer argument name mistakes (e.g. show(add=...) should be show(sel=...)).
+    Safe no-op if not present.
+    """
+    # show(add="X", ...) -> show(sel="X", ...)
+    dsl_text = re.sub(r"\bshow\(\s*add\s*=", "show(sel=", dsl_text)
+
+    # hide(add="X") -> hide(sel="X")
+    dsl_text = re.sub(r"\bhide\(\s*add\s*=", "hide(sel=", dsl_text)
+
+    # color_by_chain(add="X", ...) -> color_by_chain(sel="X", ...)
+    dsl_text = re.sub(r"\bcolor_by_chain\(\s*add\s*=", "color_by_chain(sel=", dsl_text)
+
+    return dsl_text
+
+
+def _split_lines(dsl_text: str) -> list[str]:
+    """Split a DSL program into non-empty, trimmed lines."""
+    return [cleaned(x) for x in (dsl_text or "").splitlines() if cleaned(x)]
+
+
+def _dedupe_preserve_order(lines: list[str]) -> list[str]:
+    """Deduplicate lines while preserving order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for ln in lines:
+        if ln not in seen:
+            out.append(ln)
+            seen.add(ln)
+    return out
+
+
+def _mentioned_pdb_codes(nl_query: str) -> set[str]:
+    """
+    Return 4-char PDB-like tokens explicitly mentioned by the user in the NL query.
+    We require the first char to be a digit (matches PDB IDs).
+    """
+    return {m.group(0).lower() for m in re.finditer(r"\b[0-9][A-Za-z0-9]{3}\b", nl_query or "")}
+
+
+def _planned_add_structure_codes(lines: list[str]) -> set[str]:
+    """Return PDB codes that are already planned to be loaded in this DSL program."""
+    out: set[str] = set()
+    for ln in lines:
+        m = re.search(r'add_structure\(\s*PDBID\s*=\s*"([0-9A-Za-z]{4})"\s*\)', ln)
+        if m:
+            out.add(m.group(1).lower())
+    return out
+
+
+def _extract_all_sel_code(line: str) -> str | None:
+    """
+    If a line references sel="all_<code>", return <code> (lowercase).
+    """
+    m = re.search(r'sel\s*=\s*"(all_[0-9A-Za-z]{4})"', line)
+    if not m:
+        return None
+    sel = m.group(1)
+    return sel.split("_", 1)[1].lower()
+
+
+def ensure_user_mentioned_structures_loaded(
+    nl_query: str,
+    dsl_text: str,
+    known_sels: set[str],
+) -> str:
+    """
+    If the DSL references all_<pdb> but that selection doesn't exist yet,
+    prepend add_structure(PDBID="<pdb>") ONLY if the PDB code appeared in the NL query.
+
+    This solves: "show 3eam as cartoon" when 3eam wasn't loaded yet.
+    """
+    lines = _split_lines(dsl_text)
+    mentioned = _mentioned_pdb_codes(nl_query)
+    if not mentioned:
+        return dsl_text
+
+    planned = _planned_add_structure_codes(lines)
+
+    to_add: list[str] = []
+    for ln in lines:
+        code = _extract_all_sel_code(ln)
+        if not code:
+            continue
+
+        sel = f"all_{code}"
+        if code in mentioned and sel not in known_sels and code not in planned:
+            to_add.append(f'add_structure(PDBID="{code}")')
+            planned.add(code)
+
+    if not to_add:
+        return dsl_text
+
+    return "\n".join(to_add + lines)
+
+
+def drop_unknown_selections_in_dev_loose(dsl_text: str, known_sels: set[str]) -> str:
+    """
+    DEV-LOOSE safety: drop lines referencing selections we don't know exist
+    (unless they will be created by add_structure in the same DSL program).
+
+    This prevents: hide everything -> hide(all_3eam) when 3eam wasn't loaded.
+    """
+    lines = _split_lines(dsl_text)
+    planned = _planned_add_structure_codes(lines)
+
+    kept: list[str] = []
+    for ln in lines:
+        m = re.search(r'sel\s*=\s*"(all_[0-9A-Za-z]{4})"', ln)
+        if not m:
+            kept.append(ln)
+            continue
+
+        sel = m.group(1)
+        code = sel.split("_", 1)[1].lower()
+        if sel in known_sels or code in planned:
+            kept.append(ln)
+        else:
+            print("DEV-LOOSE drop unknown selection:", sel)
+
+    kept = _dedupe_preserve_order(kept)
+    return "\n".join(kept)
+
+
 async def run_repl(entity_hint=None, with_context=False):
     chroma_dir = (
         os.environ.get("MOLCOMMANDNL_CHROMA_DIR")
@@ -187,6 +347,9 @@ async def run_repl(entity_hint=None, with_context=False):
 
     state = load_repl_state(chroma_dir)
     last_all_sel = state.get("last_all_sel", "all")
+    known_sels = set(state.get("known_sels", []))
+    if isinstance(last_all_sel, str) and last_all_sel.startswith("all_"):
+        known_sels.add(last_all_sel)
 
     def prefer_object_id(dsl_text: str) -> str:
         def _r_id_unquoted(m):
@@ -242,15 +405,49 @@ async def run_repl(entity_hint=None, with_context=False):
                 print("[DEV-NORM]", json.dumps(info, indent=2))
             dsl_prog = normed
 
+        # Fix common arg-name mistakes introduced by DEV normalizer
+        dsl_prog = repair_common_arg_mistakes(dsl_prog)
+
         # REPL-only: rewrite sel="all" -> sel="<last_all_sel>"
         dsl_prog = repair_sel_all_to_last(dsl_prog, last_all_sel)
 
         if os.environ.get("MCL_PREFER_OBJECT_ID") == "1":
             dsl_prog = prefer_object_id(dsl_prog)
 
+        dev_loose = os.environ.get("MOLCOMMANDNL_DEV_LOOSE") == "1"
+
+        # DEV-LOOSE: if the user explicitly mentioned a structure code, ensure it is loaded
+        if dev_loose:
+            dsl_prog = ensure_user_mentioned_structures_loaded(q, dsl_prog, known_sels)
+            dsl_prog = drop_unknown_selections_in_dev_loose(dsl_prog, known_sels)
+
         print("DSL>", dsl_prog)
 
+        # Validate whole program first
         v = await validate_dsl(dsl_prog)
+
+        # DEV-LOOSE: salvage by validating each line independently
+        if not v.get("ok") and dev_loose:
+            lines = _split_lines(dsl_prog)
+            ok_lines: list[str] = []
+            for ln in lines:
+                vv = await validate_dsl(ln)
+                if vv.get("ok"):
+                    ok_lines.append(ln)
+                else:
+                    print("DEV-LOOSE drop:", ln)
+                    print("  reason:", vv.get("errors"))
+
+            ok_lines = _dedupe_preserve_order(ok_lines)
+            dsl_prog = "\n".join(ok_lines)
+
+            if not dsl_prog:
+                print("DEV-LOOSE: nothing executable after salvage.")
+                continue
+
+            print("DSL> (salvaged)\n" + dsl_prog)
+            v = await validate_dsl(dsl_prog)
+
         if not v.get("ok"):
             print("Validator errors:", v.get("errors"))
             if v.get("dev"):
@@ -271,19 +468,31 @@ async def run_repl(entity_hint=None, with_context=False):
                 id_map[m_pdb.group(1).lower()] = obj
                 if obj.startswith("all_"):
                     last_all_sel = obj
-                    save_repl_state(chroma_dir, {"last_all_sel": last_all_sel})
+                    known_sels.add(obj)
+                    save_repl_state(
+                        chroma_dir,
+                        {"last_all_sel": last_all_sel, "known_sels": sorted(known_sels)},
+                    )
 
         if dsl_prog.startswith("add_structure") and isinstance(out, dict):
             obj = out.get("result")
             if isinstance(obj, str) and obj.startswith("all_"):
                 last_all_sel = obj
-                save_repl_state(chroma_dir, {"last_all_sel": last_all_sel})
+                known_sels.add(obj)
+                save_repl_state(
+                    chroma_dir,
+                    {"last_all_sel": last_all_sel, "known_sels": sorted(known_sels)},
+                )
 
         # ALSO update focus when a command explicitly mentions sel="all_XXXX"
         focused = maybe_focus_last_all_sel_from_program(dsl_prog)
         if focused and focused != last_all_sel:
             last_all_sel = focused
-            save_repl_state(chroma_dir, {"last_all_sel": last_all_sel})
+            known_sels.add(focused)
+            save_repl_state(
+                chroma_dir,
+                {"last_all_sel": last_all_sel, "known_sels": sorted(known_sels)},
+            )
 
 
 def main():
