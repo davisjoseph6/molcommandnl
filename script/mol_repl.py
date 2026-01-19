@@ -21,6 +21,10 @@ DEV-LOOSE behavior (MOLCOMMANDNL_DEV_LOOSE=1):
       mentioned <code> in the NL query and we reference all_<code> in DSL.
     * dropping hide/show/color lines that refer to selections we don't know exist.
 
+Extra DEV robustness:
+- If the LLM outputs show(rep=...) or color_by_chain(target=...) without sel=...,
+  auto-inject sel="<last_all_sel>" (or "all" if unknown) BEFORE validation.
+
 Other:
 - Persist last_all_sel and known selections across REPL runs (repl_state.json).
 - Pre-rewrite common shorthand NL like "load 1crn" -> "Load PDB ID 1crn"
@@ -186,6 +190,30 @@ def repair_sel_all_to_last(dsl_text: str, last_all_sel: str) -> str:
         f'color_by_chain(sel="{last_all_sel}",',
         dsl_text,
     )
+    return dsl_text
+
+
+def repair_missing_sel_args(dsl_text: str, last_all_sel: str) -> str:
+    """
+    If the LLM outputs show(rep=...) or color_by_chain(target=...) without sel=,
+    inject sel="<last_all_sel>" (or "all" if unknown) so the validator can accept it.
+    """
+    sel = last_all_sel if last_all_sel else "all"
+
+    # show(rep="surface") -> show(sel="...", rep="surface")
+    dsl_text = re.sub(
+        r'\bshow\(\s*rep\s*=',
+        f'show(sel="{sel}", rep=',
+        dsl_text,
+    )
+
+    # color_by_chain(target="surface") -> color_by_chain(sel="...", target="surface")
+    dsl_text = re.sub(
+        r'\bcolor_by_chain\(\s*target\s*=',
+        f'color_by_chain(sel="{sel}", target=',
+        dsl_text,
+    )
+
     return dsl_text
 
 
@@ -395,6 +423,7 @@ async def run_repl(entity_hint=None, with_context=False):
 
         dsl_prog = repair_common_arg_mistakes(dsl_prog)
         dsl_prog = repair_sel_all_to_last(dsl_prog, last_all_sel)
+        dsl_prog = repair_missing_sel_args(dsl_prog, last_all_sel)
 
         if os.environ.get("MCL_PREFER_OBJECT_ID") == "1":
             dsl_prog = prefer_object_id(dsl_prog)
