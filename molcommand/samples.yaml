@@ -4,207 +4,475 @@
     entities:
     - representation
     context: null
-
 - utterance: Color the line representation by chain
   sub_samples:
   - program: color_by_chain(sel="all", target="line")
     entities:
     - representation
     context: null
-
 - utterance: Color the surface by chain
   sub_samples:
   - program: color_by_chain(sel="all", target="surface")
     entities:
     - representation
     context: null
-
 - utterance: Color the tube by chain
   sub_samples:
   - program: color_by_chain(sel="all", target="tube")
     entities:
     - representation
     context: null
-
 - utterance: Color atoms by chain
   sub_samples:
   - program: color_by_chain(sel="all", target="atom")
     entities:
     - representation
     context: null
-
 - utterance: Color the cartoon by chain for 1crn
   sub_samples:
   - program: color_by_chain(sel="all_1crn", target="cartoon")
     entities:
     - representation
     context: null
-
 - utterance: Color the cartoon by chain for 3eam
   sub_samples:
   - program: color_by_chain(sel="all_3eam", target="cartoon")
     entities:
     - representation
     context: null
-
 - utterance: Hide 1crn
   sub_samples:
   - program: hide(sel="all_1crn")
     entities:
     - representation
     context: null
-
 - utterance: Hide 1kx2
   sub_samples:
   - program: hide(sel="all_1kx2")
     entities:
     - representation
     context: null
-
 - utterance: Hide 3eam
   sub_samples:
   - program: hide(sel="all_3eam")
     entities:
     - representation
     context: null
-
 - utterance: Hide everything
   sub_samples:
   - program: hide(sel="all")
     entities:
     - representation
     context: null
-
 - utterance: Load a protein from the PDB with ID 3eam
   sub_samples:
   - program: add_structure(PDBID="3eam")
     entities:
     - structure
     context: null
-
 - utterance: Load a structure from file 'myfile.pdb'
   sub_samples:
   - program: add_structure(filePath="myfile.pdb")
     entities:
     - structure
     context: null
-
 - utterance: Load PDB ID 1crn
   sub_samples:
   - program: add_structure(PDBID="1crn")
     entities:
     - structure
     context: null
-
 - utterance: Load PDB ID 1kx2
   sub_samples:
   - program: add_structure(PDBID="1kx2")
     entities:
     - structure
     context: null
-
 - utterance: Select all atoms from 1kx2
   sub_samples:
   - program: select(query="all_1kx2", name="all_1kx2")
     entities:
     - selection
     context: null
-
 - utterance: Select protein for 1kx2
   sub_samples:
   - program: select(query="1kx2_protein_or_nucleic", name="prot")
     entities:
     - selection
     context: null
-
 - utterance: Show 1crn as cartoon
   sub_samples:
   - program: show(sel="all_1crn", rep="cartoon")
     entities:
     - representation
     context: null
-
 - utterance: Show 1crn as lines
   sub_samples:
   - program: show(sel="all_1crn", rep="lines")
     entities:
     - representation
     context: null
-
 - utterance: Show 1crn as spheres
   sub_samples:
   - program: show(sel="all_1crn", rep="spheres")
     entities:
     - representation
     context: null
-
 - utterance: Show 1crn as surface
   sub_samples:
   - program: show(sel="all_1crn", rep="surface")
     entities:
     - representation
     context: null
-
 - utterance: Show 1kx2 as cartoon
   sub_samples:
   - program: show(sel="all_1kx2", rep="cartoon")
     entities:
     - representation
     context: null
-
 - utterance: Show 1kx2 as lines
   sub_samples:
   - program: show(sel="all_1kx2", rep="lines")
     entities:
     - representation
     context: null
-
 - utterance: Show 1kx2 as spheres
   sub_samples:
   - program: show(sel="all_1kx2", rep="spheres")
     entities:
     - representation
     context: null
-
 - utterance: Show 1kx2 as surface
   sub_samples:
   - program: show(sel="all_1kx2", rep="surface")
     entities:
     - representation
     context: null
-
 - utterance: Show 3eam as cartoon
   sub_samples:
   - program: show(sel="all_3eam", rep="cartoon")
     entities:
     - representation
     context: null
-
 - utterance: Show 3eam as licorice
   sub_samples:
   - program: show(sel="all_3eam", rep="lines")
     entities:
     - representation
     context: null
-
 - utterance: Show 3eam as spheres
   sub_samples:
   - program: show(sel="all_3eam", rep="spheres")
     entities:
     - representation
     context: null
-
 - utterance: Show 3eam as surface
   sub_samples:
   - program: show(sel="all_3eam", rep="surface")
     entities:
     - representation
     context: null
-
 - utterance: Show the protein selection in cartoon
   sub_samples:
   - program: show(sel="prot", rep="cartoon")
     entities:
     - representation
     context: null
+- utterance: Fetch 1crn
+  sub_samples:
+  - entities:
+    - structure
+    program: 'add_structure(PDBID="1crn")
 
+      '
+    context: null
+    tags:
+    - pymol
+    - fetch
+    - structure
+- utterance: Open PDB 3eam
+  sub_samples:
+  - entities:
+    - structure
+    program: 'add_structure(PDBID="3eam")
+
+      '
+    context: null
+    tags:
+    - pymol
+    - open
+    - structure
+- utterance: Load protein 1crn from the PDB
+  sub_samples:
+  - entities:
+    - structure
+    program: 'add_structure(PDBID="1crn")
+
+      '
+    context: null
+    tags:
+    - structure
+- utterance: Show 1crn as surface
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="1crn")
+
+      show(sel="all_1crn", rep="surface")
+
+      '
+    context: null
+    tags:
+    - show
+    - surface
+- utterance: Display 1crn in surface
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="1crn")
+
+      show(sel="all_1crn", rep="surface")
+
+      '
+    context: null
+    tags:
+    - show
+    - surface
+- utterance: Use Surf representation for 1crn
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="1crn")
+
+      show(sel="all_1crn", rep="surface")
+
+      '
+    context: null
+    tags:
+    - vmd
+    - surface
+- utterance: Show 3eam as cartoon
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="3eam")
+
+      show(sel="all_3eam", rep="cartoon")
+
+      '
+    context: null
+    tags:
+    - show
+    - cartoon
+- utterance: Display 3eam in cartoon
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="3eam")
+
+      show(sel="all_3eam", rep="cartoon")
+
+      '
+    context: null
+    tags:
+    - show
+    - cartoon
+- utterance: Set drawing method to NewCartoon for 3eam
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="3eam")
+
+      show(sel="all_3eam", rep="cartoon")
+
+      '
+    context: null
+    tags:
+    - vmd
+    - newcartoon
+    - cartoon
+- utterance: Show 1crn as spheres
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="1crn")
+
+      show(sel="all_1crn", rep="spheres")
+
+      '
+    context: null
+    tags:
+    - show
+    - spheres
+- utterance: Show 3eam as spheres
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="3eam")
+
+      show(sel="all_3eam", rep="spheres")
+
+      '
+    context: null
+    tags:
+    - show
+    - spheres
+- utterance: Hide 1crn
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="1crn")
+
+      hide(sel="all_1crn")
+
+      '
+    context: null
+    tags:
+    - hide
+- utterance: Hide 3eam
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="3eam")
+
+      hide(sel="all_3eam")
+
+      '
+    context: null
+    tags:
+    - hide
+- utterance: Hide everything
+  sub_samples:
+  - entities:
+    - scene
+    - representation
+    program: 'hide(sel="all")
+
+      '
+    context: null
+    tags:
+    - hide
+    - scene
+- utterance: Color the surface by chain for 1crn
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="1crn")
+
+      show(sel="all_1crn", rep="surface")
+
+      color_by_chain(sel="all_1crn", target="surface")
+
+      '
+    context: null
+    tags:
+    - color
+    - chain
+    - surface
+- utterance: Color 1crn surface by chain
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="1crn")
+
+      show(sel="all_1crn", rep="surface")
+
+      color_by_chain(sel="all_1crn", target="surface")
+
+      '
+    context: null
+    tags:
+    - color
+    - chain
+    - surface
+- utterance: Coloring method Chain for 1crn surface
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="1crn")
+
+      show(sel="all_1crn", rep="surface")
+
+      color_by_chain(sel="all_1crn", target="surface")
+
+      '
+    context: null
+    tags:
+    - vmd
+    - chain
+    - surface
+- utterance: Color the cartoon by chain for 3eam
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="3eam")
+
+      show(sel="all_3eam", rep="cartoon")
+
+      color_by_chain(sel="all_3eam", target="cartoon")
+
+      '
+    context: null
+    tags:
+    - color
+    - chain
+    - cartoon
+- utterance: Color 3eam cartoon by chain
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="3eam")
+
+      show(sel="all_3eam", rep="cartoon")
+
+      color_by_chain(sel="all_3eam", target="cartoon")
+
+      '
+    context: null
+    tags:
+    - color
+    - chain
+    - cartoon
+- utterance: Load 1crn and show as surface
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="1crn")
+
+      show(sel="all_1crn", rep="surface")
+
+      '
+    context: null
+    tags:
+    - combined
+    - surface
+- utterance: Open 3eam and show as cartoon
+  sub_samples:
+  - entities:
+    - structure
+    - representation
+    program: 'add_structure(PDBID="3eam")
+
+      show(sel="all_3eam", rep="cartoon")
+
+      '
+    context: null
+    tags:
+    - combined
+    - cartoon

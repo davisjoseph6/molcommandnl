@@ -10,3 +10,6 @@ __pycache__
 # Backup files
 *.bak
 *.bak.*
+
+# Local vendor repos (do not commit)
+external/
