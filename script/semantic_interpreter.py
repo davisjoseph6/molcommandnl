@@ -1,18 +1,42 @@
-# semantic_interpreter.py
-
+#!/usr/bin/env python3
 """
+molcommandnl.script.semantic_interpreter
+
 Semantic Interpreter (bank-backed NL → DSL)
 - Entity/context classification (LLM)
 - Example retrieval with Chroma
 - Prompt construction (syntax + rules + examples)
 - LLM synthesis → DSL
 - Parse → AST → corrections → cleaned DSL
+
 Returns a result that works with both dict- and attribute-style access.
 """
 
 from __future__ import annotations
-import os, re, io, json, difflib, inspect, logging
+
+import os
+import re
+import json
+import difflib
+import logging
 from typing import List, Dict, Any, Optional, Tuple, Union
+
+# -----------------------------------------------------------------------------
+# Telemetry + logging silencing (must be BEFORE chromadb import/initialization)
+# -----------------------------------------------------------------------------
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+os.environ.setdefault("CHROMADB_TELEMETRY", "0")
+os.environ.setdefault("CHROMA_TELEMETRY", "False")
+
+for name in (
+    "chromadb",
+    "chromadb.api.segment",
+    "chromadb.telemetry.product.posthog",
+    "chromadb.telemetry",
+):
+    lg = logging.getLogger(name)
+    lg.setLevel(logging.CRITICAL)
+    lg.propagate = False
 
 from utils import load_config, get_logger
 from llm_client import LLMClient
@@ -21,8 +45,8 @@ from dsl_interface import DSLInterface
 # --- Env config (OLLAMA_HOST) -------------------------------------------------
 script_dir = os.path.dirname(os.path.abspath(__file__))
 config = load_config(os.path.join(script_dir, "..", "config", "env"))
-if (OLLAMA_HOST := config.get("OLLAMA_HOST")):
-    print(f"Setting OLLAMA_HOST to {OLLAMA_HOST}")
+OLLAMA_HOST = config.get("OLLAMA_HOST")
+if OLLAMA_HOST:
     os.environ["OLLAMA_HOST"] = OLLAMA_HOST
 
 # --- Logging ------------------------------------------------------------------
@@ -32,15 +56,12 @@ alog = get_logger(name="d", level=logging.DEBUG)
 
 # --- Chroma + embeddings ------------------------------------------------------
 from langchain_community.embeddings.ollama import OllamaEmbeddings
+
 try:
     from chromadb import PersistentClient as ChromaPersistentClient
 except Exception:
     ChromaPersistentClient = None  # legacy path fallback below
 
-
-# ==============================================================================
-# Utilities
-# ==============================================================================
 
 def _default_chroma_dir() -> str:
     """
@@ -55,30 +76,25 @@ def _default_chroma_dir() -> str:
         or os.path.expanduser("~/.cache/molcommandnl/chroma")
     )
     os.makedirs(path, exist_ok=True)
-    # Silence Chroma telemetry unless explicitly enabled
-    os.environ.setdefault("CHROMADB_TELEMETRY", "0")
     return path
 
 
-# Small result helper that supports both dict['dsl'] and .program / .cleaned_program
 class InterpretResult(dict):
+    """
+    Small result helper that supports both dict['dsl'] and .program / .cleaned_program.
+    """
+
     def __init__(self, dsl: str, ast: List[Dict[str, Any]], cleaned: str):
         super().__init__(dsl=dsl, ast=ast, cleaned_dsl=cleaned)
-        # attribute aliases expected by your REPL
         self.program = dsl
         self.cleaned_program = cleaned
 
-    # Make getattr work like attributes (already set above)
     def __getattr__(self, name):
         try:
             return self[name]
         except KeyError as e:
             raise AttributeError(name) from e
 
-
-# ==============================================================================
-# Entity + context classifier
-# ==============================================================================
 
 class EntityContextClassifier:
     def __init__(self, llm: LLMClient, dsl: DSLInterface):
@@ -102,11 +118,15 @@ class EntityContextClassifier:
         log.debug(f"=== LLM returned ===\n{result}\n=== END ===")
 
         cats = re.search(r"Categories:\s*\[(.*?)\]", result or "")
-        ctx  = re.search(r"RequiresContext:\s*(true|false)", result or "", re.IGNORECASE)
-        entities = [e.strip().strip('"\'') for e in (cats.group(1).split(',') if cats else []) if e.strip()]
+        ctx = re.search(r"RequiresContext:\s*(true|false)", result or "", re.IGNORECASE)
+
+        entities = [
+            e.strip().strip('"\'')
+            for e in (cats.group(1).split(",") if cats else [])
+            if e.strip()
+        ]
         requires_context = ctx.group(1).lower() == "true" if ctx else False
 
-        # Heuristics: nudge entity coverage based on wording
         ut = (utterance or "").lower()
         if "select" in ut and "selection" not in entities:
             entities.append("selection")
@@ -122,10 +142,6 @@ class EntityContextClassifier:
         return entities, requires_context
 
 
-# ==============================================================================
-# Sample bank (Chroma)
-# ==============================================================================
-
 class SampleBank:
     def __init__(self, dsl: DSLInterface, persist_dir: Optional[str] = None):
         self.dsl = dsl
@@ -135,7 +151,6 @@ class SampleBank:
         client = None
         err_new = err_old = None
 
-        # New API
         if ChromaPersistentClient is not None:
             try:
                 client = ChromaPersistentClient(path=persist_dir)
@@ -143,15 +158,17 @@ class SampleBank:
                 err_new = e
                 client = None
 
-        # Legacy API
         if client is None:
             try:
                 import chromadb
                 from chromadb.config import Settings
-                client = chromadb.Client(Settings(
-                    chroma_db_impl="duckdb+parquet",
-                    persist_directory=persist_dir
-                ))
+
+                client = chromadb.Client(
+                    Settings(
+                        chroma_db_impl="duckdb+parquet",
+                        persist_directory=persist_dir,
+                    )
+                )
             except Exception as e:
                 err_old = e
 
@@ -165,34 +182,34 @@ class SampleBank:
 
         self.client = client
 
-        # Collection
         name = dsl.get_collection_name()
         try:
             if hasattr(self.client, "get_or_create_collection"):
                 self.collection = self.client.get_or_create_collection(name)
             else:
+                # Legacy: create-first avoids "not created" info logs in many builds
                 try:
-                    self.collection = self.client.get_collection(name)
-                except Exception:
                     self.collection = self.client.create_collection(name)
+                except Exception:
+                    self.collection = self.client.get_collection(name)
         except Exception as e:
             raise RuntimeError(f"Could not open/create Chroma collection '{name}': {e}")
 
-        # Embedding function (we pass query embeddings directly)
         base_url = os.environ.get("OLLAMA_HOST")
         self.embed_query = OllamaEmbeddings(
             model="nomic-embed-text",
-            **({"base_url": base_url} if base_url else {})
+            **({"base_url": base_url} if base_url else {}),
         ).embed_query
-
-    # ---- retrieval helpers ----------------------------------------------------
 
     def _count_utterances_and_subsamples_raw(self, metadatas: List[Dict[str, Any]]) -> Tuple[int, int]:
         def parse_sub_samples(ss):
             if isinstance(ss, str):
-                try: return json.loads(ss)
-                except json.JSONDecodeError: return []
+                try:
+                    return json.loads(ss)
+                except json.JSONDecodeError:
+                    return []
             return ss if isinstance(ss, list) else []
+
         num_utter = len(metadatas or [])
         num_subs = sum(len(parse_sub_samples(m.get("sub_samples", []))) for m in (metadatas or []))
         return num_utter, num_subs
@@ -200,8 +217,10 @@ class SampleBank:
     def _entity_in_subsamples(self, entity: str, meta: Dict[str, Any]) -> bool:
         ss = meta.get("sub_samples", [])
         if isinstance(ss, str):
-            try: ss = json.loads(ss)
-            except json.JSONDecodeError: ss = []
+            try:
+                ss = json.loads(ss)
+            except json.JSONDecodeError:
+                ss = []
         for s in ss:
             if entity in (s.get("entities") or []):
                 return True
@@ -212,8 +231,10 @@ class SampleBank:
         for meta, dist in zip(metadatas, distances):
             ss = meta.get("sub_samples", [])
             if isinstance(ss, str):
-                try: ss = json.loads(ss)
-                except json.JSONDecodeError: ss = []
+                try:
+                    ss = json.loads(ss)
+                except json.JSONDecodeError:
+                    ss = []
             filtered_ss = [s for s in ss if any(e in allowed_entities for e in (s.get("entities") or []))]
             if filtered_ss:
                 processed["metadatas"].append({"utterance": meta.get("utterance"), "sub_samples": filtered_ss})
@@ -224,15 +245,19 @@ class SampleBank:
         if not stored_ctx or not isinstance(current_ctx, dict):
             return 0.0
         if isinstance(stored_ctx, str):
-            try: stored_ctx = json.loads(stored_ctx)
-            except json.JSONDecodeError: return 0.0
-        # exact structural containment
+            try:
+                stored_ctx = json.loads(stored_ctx)
+            except json.JSONDecodeError:
+                return 0.0
+
         for k, v in stored_ctx.items():
             if isinstance(v, dict):
-                if not self._context_match(v, current_ctx.get(k, {})):
+                if self._context_match(v, current_ctx.get(k, {})) < 1.0:
                     return 0.0
-            elif current_ctx.get(k) != v:
-                return 0.0
+            else:
+                if current_ctx.get(k) != v:
+                    return 0.0
+
         alog.debug(f"Successful match for stored_ctx: {stored_ctx}")
         return 1.0
 
@@ -255,8 +280,6 @@ class SampleBank:
                 processed["distances"].append(dist)
         return processed
 
-    # ---- main retrieval -------------------------------------------------------
-
     def entity_aware_search(
         self,
         utterance: str,
@@ -264,7 +287,6 @@ class SampleBank:
         k: int = 5,
         context: Optional[Dict] = None,
     ) -> List[Tuple[float, Dict[str, Any]]]:
-        # Normalize + embed
         norm = self.dsl.normalize_text(utterance)
         emb = self.embed_query(norm)
 
@@ -276,23 +298,15 @@ class SampleBank:
 
         metadatas = results.get("metadatas", [])
         distances = results.get("distances", [])
-        if metadatas and isinstance(metadatas[0], list): metadatas = metadatas[0]
-        if distances and isinstance(distances[0], list): distances = distances[0]
-
-        num_utts, num_subs = self._count_utterances_and_subsamples_raw(metadatas)
-        alog.tmp = f"Utterances: {num_utts}, Sub-samples: {num_subs}\n        "
+        if metadatas and isinstance(metadatas[0], list):
+            metadatas = metadatas[0]
+        if distances and isinstance(distances[0], list):
+            distances = distances[0]
 
         filtered = self._filter_entity_results_raw(metadatas, distances, entities)
-        num_utts, num_subs = self._count_utterances_and_subsamples_raw(filtered["metadatas"])
-        alog.tmp += f"Utterances: {num_utts}, Sub-samples: {num_subs} after entity filter\n        "
-
         if context:
             filtered = self._subsample_match_context(filtered, context)
 
-        num_utts, num_subs = self._count_utterances_and_subsamples_raw(filtered["metadatas"])
-        alog.debug(alog.tmp + f"Utterances: {num_utts}, Sub-samples: {num_subs} after context match")
-
-        # One per entity, then fill
         seen = set()
         final: List[Tuple[float, Dict[str, Any], str]] = []
         target = max(len(entities) or 1, k)
@@ -309,9 +323,11 @@ class SampleBank:
                     break
 
         for meta, dist in zip(filtered["metadatas"], filtered["distances"]):
-            if len(final) >= target: break
+            if len(final) >= target:
+                break
             sid = meta.get("utterance", "")
-            if sid in seen: continue
+            if sid in seen:
+                continue
             final.append((dist, meta, sid))
             seen.add(sid)
 
@@ -324,10 +340,6 @@ class SampleBank:
 
         return [(d, m) for (d, m, _) in final]
 
-
-# ==============================================================================
-# Prompt construction
-# ==============================================================================
 
 class PromptConstructor:
     def __init__(self, dsl: DSLInterface, sample_bank: SampleBank):
@@ -352,13 +364,15 @@ class PromptConstructor:
             for score, ex in samples:
                 sub_samples = ex.get("sub_samples", [])
                 if isinstance(sub_samples, str):
-                    try: sub_samples = json.loads(sub_samples)
-                    except json.JSONDecodeError: sub_samples = []
+                    try:
+                        sub_samples = json.loads(sub_samples)
+                    except json.JSONDecodeError:
+                        sub_samples = []
                 for ss in sub_samples:
                     usr_parts.append(f"\n# User Instruction: {ex.get('utterance','')}  # sim={score:.3f}")
                     if ss.get("context"):
                         usr_parts.append(f"# Context: {ss['context']}")
-                    usr_parts.append(ss.get("program","").strip())
+                    usr_parts.append(ss.get("program", "").strip())
 
         usr_parts.append(f"\n# User Utterance to implement: {utterance}")
         if context:
@@ -366,10 +380,6 @@ class PromptConstructor:
         usr_parts.append("### DSL Program:")
         return {"system": "\n".join(sys_parts), "user": "\n".join(usr_parts)}
 
-
-# ==============================================================================
-# Program synthesis
-# ==============================================================================
 
 class ProgramSynthesizer:
     def __init__(self, llm: LLMClient, dsl: DSLInterface, temperature: float = 0.0, max_tokens: int = 512):
@@ -395,10 +405,6 @@ class ProgramSynthesizer:
         return (raw or "").strip()
 
 
-# ==============================================================================
-# DSL Parse / Unparse
-# ==============================================================================
-
 class DSLParser:
     def parse(self, program_text: str) -> List[Dict[str, Any]]:
         ast: List[Dict[str, Any]] = []
@@ -419,32 +425,37 @@ class DSLParser:
                     in_q, qch = True, ch
                 elif in_q and ch == qch:
                     in_q, qch = False, None
-                elif not in_q and ch == '[':
+                elif not in_q and ch == "[":
                     depth += 1
-                elif not in_q and ch == ']':
+                elif not in_q and ch == "]":
                     depth -= 1
-                if ch == ',' and not in_q and depth == 0:
-                    parts.append(''.join(buf).strip()); buf = []
+                if ch == "," and not in_q and depth == 0:
+                    parts.append("".join(buf).strip())
+                    buf = []
                 else:
                     buf.append(ch)
             if buf:
-                parts.append(''.join(buf).strip())
+                parts.append("".join(buf).strip())
 
             for p in parts:
-                if not p or '=' not in p:
+                if not p or "=" not in p:
                     continue
-                k, v = p.split('=', 1)
+                k, v = p.split("=", 1)
                 k, v = k.strip(), v.strip()
-                if v.startswith('[') and v.endswith(']'):
-                    try: val = json.loads(v)
-                    except Exception: val = v
+                if v.startswith("[") and v.endswith("]"):
+                    try:
+                        val = json.loads(v)
+                    except Exception:
+                        val = v
                 elif (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
                     val = v[1:-1]
-                elif v.lower() in ("true","false"):
+                elif v.lower() in ("true", "false"):
                     val = v.lower() == "true"
                 else:
-                    try: val = float(v) if '.' in v else int(v)
-                    except Exception: val = v
+                    try:
+                        val = float(v) if "." in v else int(v)
+                    except Exception:
+                        val = v
                 args[k] = val
 
             ast.append({"var": var, "stmt": stmt, "args": args})
@@ -470,59 +481,42 @@ class DSLParser:
         return "\n".join(lines)
 
 
-# ==============================================================================
-# DSL Corrections
-# ==============================================================================
-
 class CodeCorrector:
     def __init__(self, dsl: DSLInterface):
         self.dsl = dsl
 
     def correct(self, ast: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         stmt_aliases = self.dsl.get_statement_aliases()
-        valid_enums  = self.dsl.get_valid_enums()
+        valid_enums = self.dsl.get_valid_enums()
         out: List[Dict[str, Any]] = []
 
         for node in ast:
             stmt = node.get("stmt", "")
 
-            # alias normalization
             if stmt in stmt_aliases:
                 node["stmt"] = stmt_aliases[stmt]
                 stmt = node["stmt"]
 
-            # enum normalization
             for arg, val in list(node.get("args", {}).items()):
                 if arg in valid_enums and isinstance(val, str):
                     match = difflib.get_close_matches(val, valid_enums[arg], n=1)
                     if match:
                         node["args"][arg] = match[0]
 
-            # DSL-specific corrections
             node = self.dsl.additional_corrections(node)
             if node is None:
                 print("[INFO] Command ignored after DSL corrections.")
                 continue
-            if node is None:
-                print("[INFO] Command ignored after DSL corrections.")
-                continue
-            if node is None:
-                print("[INFO] Command ignored after DSL corrections.")
-                continue
 
-            # scope validation (only for select_* office-style)
             node = self.dsl.validate_scope(node)
             if node is None:
                 print("[INFO] Command was ignored after verification of command scopes.")
                 continue
 
             out.append(node)
+
         return out
 
-
-# ==============================================================================
-# Orchestrator
-# ==============================================================================
 
 class SemanticInterpreter:
     def __init__(self, dsl: DSLInterface, llm: LLMClient, chroma_path: Optional[str] = None):
@@ -534,19 +528,19 @@ class SemanticInterpreter:
         """
         persist_dir = chroma_path or getattr(dsl, "CHROMA_PATH", None) or _default_chroma_dir()
 
-        self.sample_bank   = SampleBank(dsl, persist_dir)
-        self.classifier    = EntityContextClassifier(llm, dsl)
+        self.sample_bank = SampleBank(dsl, persist_dir)
+        self.classifier = EntityContextClassifier(llm, dsl)
         self.prompt_builder = PromptConstructor(dsl, self.sample_bank)
-        self.synth         = ProgramSynthesizer(llm, dsl)
-        self.parser        = DSLParser()
-        self.corrector     = CodeCorrector(dsl)
-        self.dsl           = dsl
+        self.synth = ProgramSynthesizer(llm, dsl)
+        self.parser = DSLParser()
+        self.corrector = CodeCorrector(dsl)
+        self.dsl = dsl
 
     def interpret(
         self,
         utterance: str,
         entity_hint: Optional[Union[str, List[str]]] = None,
-        context: Optional[Dict] = None
+        context: Optional[Dict] = None,
     ) -> InterpretResult:
         """
         Return an InterpretResult with fields:
@@ -567,16 +561,11 @@ class SemanticInterpreter:
         corrected_ast = self.corrector.correct(ast)
         cleaned = self.parser.unparse(corrected_ast)
 
-        # Final adapter for the validator grammar (positional enums, hide_all, etc.)
         if hasattr(self.dsl, "postprocess_for_validator"):
             cleaned = self.dsl.postprocess_for_validator(cleaned, utterance=utterance)
 
         return InterpretResult(dsl=dsl_prog, ast=corrected_ast, cleaned=cleaned)
 
-
-# ==============================================================================
-# Library only
-# ==============================================================================
 
 if __name__ == "__main__":
     print("semantic_interpreter.py is a library. Use script/mol_repl.py to run the REPL.")
