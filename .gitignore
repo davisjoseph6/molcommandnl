@@ -13,3 +13,6 @@ __pycache__
 
 # Local vendor repos (do not commit)
 external/
+
+# Editor/backup files
+*.bak_*
