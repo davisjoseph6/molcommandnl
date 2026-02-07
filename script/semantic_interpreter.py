@@ -9,6 +9,10 @@ Semantic Interpreter (bank-backed NL → DSL)
 - LLM synthesis → DSL
 - Parse → AST → corrections → cleaned DSL
 
+Step 8 addition:
+- Optional retrieval of raw PyMOL/VMD scripts from a separate Chroma collection
+  ("molcommand_raw_scripts") and injection as REFERENCE ONLY context in the prompt.
+
 Returns a result that works with both dict- and attribute-style access.
 """
 
@@ -341,10 +345,149 @@ class SampleBank:
         return [(d, m) for (d, m, _) in final]
 
 
+# -----------------------------------------------------------------------------
+# Raw script retrieval (PyMOL/VMD) -> prompt context helper
+# -----------------------------------------------------------------------------
+
+def _raw_trigger(utterance: str) -> bool:
+    """True if NL query suggests PyMOL/VMD raw-script context would help."""
+    u = (utterance or "").lower()
+    return bool(
+        re.search(
+            r"\b(pymol|vmd|pml|tcl|util\.|mol\s+mod|animate|ray|colorid|newcartoon|dcd|psf|namd|trajectory|traj)\b",
+            u,
+        )
+    )
+
+
+def _raw_source_hint(utterance: str) -> Optional[str]:
+    """Guess whether to filter raw scripts to pymol or vmd."""
+    u = (utterance or "").lower()
+    if re.search(r"\b(vmd|tcl|mol\s+mod|animate|dcd|psf|namd)\b", u):
+        return "vmd"
+    if re.search(r"\b(pymol|pml|util\.|ray)\b", u):
+        return "pymol"
+    return None
+
+
+class RawScriptBank:
+    """
+    Retriever for the molcommand_raw_scripts Chroma collection.
+
+    We store full raw docs in Chroma, but for prompting we only inject a snippet.
+    """
+
+    def __init__(
+        self,
+        client,
+        embed_query,
+        dsl: DSLInterface,
+        collection_name: str = "molcommand_raw_scripts",
+        max_chars: int = 1400,
+    ):
+        self.client = client
+        self.embed_query = embed_query
+        self.dsl = dsl
+        self.collection_name = collection_name
+        self.max_chars = max_chars
+
+        try:
+            # both APIs generally support get_collection; older builds may differ
+            self.collection = self.client.get_collection(collection_name)
+        except Exception:
+            self.collection = self.client.get_or_create_collection(collection_name)
+
+    @staticmethod
+    def _best_window(doc: str, query: str, max_chars: int) -> str:
+        """Take a window around the first match of any keyword; fallback to head."""
+        if not doc:
+            return ""
+        dlow = doc.lower()
+        qlow = (query or "").lower()
+
+        words = [w for w in re.findall(r"[a-zA-Z0-9_.]+", qlow) if len(w) >= 4]
+        words = words[:12]
+
+        pos = -1
+        for w in words:
+            p = dlow.find(w)
+            if p != -1:
+                pos = p
+                break
+
+        if pos == -1:
+            return doc[:max_chars]
+
+        start = max(0, pos - 400)
+        end = min(len(doc), start + max_chars)
+        return doc[start:end]
+
+    def search(self, utterance: str, source: Optional[str] = None, k: int = 2) -> List[Dict[str, Any]]:
+        norm = self.dsl.normalize_text(utterance) if hasattr(self.dsl, "normalize_text") else (utterance or "")
+        emb = self.embed_query(norm)
+
+        include = ["documents", "metadatas", "distances"]
+
+        try:
+            if source:
+                res = self.collection.query(
+                    query_embeddings=[emb],
+                    n_results=k,
+                    where={"source": source},
+                    include=include,
+                )
+            else:
+                res = self.collection.query(
+                    query_embeddings=[emb],
+                    n_results=k,
+                    include=include,
+                )
+        except Exception:
+            # Compatibility fallback: query without where and filter afterwards
+            res = self.collection.query(
+                query_embeddings=[emb],
+                n_results=max(k * 3, 6),
+                include=include,
+            )
+
+        docs = res.get("documents", [])
+        metas = res.get("metadatas", [])
+        dists = res.get("distances", [])
+        ids = res.get("ids", [])
+
+        if docs and isinstance(docs[0], list):
+            docs = docs[0]
+        if metas and isinstance(metas[0], list):
+            metas = metas[0]
+        if dists and isinstance(dists[0], list):
+            dists = dists[0]
+        if ids and isinstance(ids[0], list):
+            ids = ids[0]
+
+        out: List[Dict[str, Any]] = []
+        for doc, meta, dist, _id in zip(docs, metas, dists, ids):
+            if source and meta and meta.get("source") != source:
+                continue
+            snippet = self._best_window(doc, utterance, self.max_chars)
+            out.append(
+                {
+                    "id": _id,
+                    "distance": dist,
+                    "meta": meta or {},
+                    "snippet": snippet,
+                }
+            )
+            if len(out) >= k:
+                break
+
+        return out
+
+
 class PromptConstructor:
-    def __init__(self, dsl: DSLInterface, sample_bank: SampleBank):
+    def __init__(self, dsl: DSLInterface, sample_bank: SampleBank, raw_bank: Optional[RawScriptBank] = None):
         self.dsl = dsl
         self.bank = sample_bank
+        self.raw_bank = raw_bank
 
     def build_prompt(self, utterance: str, context: Optional[Dict], entities: List[str], k: int = 5) -> Dict[str, str]:
         sys_parts = [
@@ -373,6 +516,25 @@ class PromptConstructor:
                     if ss.get("context"):
                         usr_parts.append(f"# Context: {ss['context']}")
                     usr_parts.append(ss.get("program", "").strip())
+
+        # --- Raw script context (PyMOL/VMD) ---
+        use_raw = os.environ.get("MOLCOMMANDNL_USE_RAW_SCRIPTS", "1") == "1"
+        if use_raw and self.raw_bank and _raw_trigger(utterance):
+            hint = _raw_source_hint(utterance)
+            raws = self.raw_bank.search(utterance, source=hint, k=2)
+            if not raws and hint:
+                raws = self.raw_bank.search(utterance, source=None, k=2)
+
+            if raws:
+                usr_parts.append("\n### Raw scripts (REFERENCE ONLY; DO NOT OUTPUT THESE).")
+                usr_parts.append("### Use them only to map PyMOL/VMD idioms to the DSL.\n")
+                for i, r in enumerate(raws, 1):
+                    meta = r.get("meta", {})
+                    src = meta.get("source", "?")
+                    fn = meta.get("file", "?")
+                    dist = r.get("distance", 0.0)
+                    usr_parts.append(f"# RawScript[{i}] source={src} file={fn} dist={dist:.3f}")
+                    usr_parts.append((r.get("snippet", "") or "").rstrip())
 
         usr_parts.append(f"\n# User Utterance to implement: {utterance}")
         if context:
@@ -529,8 +691,10 @@ class SemanticInterpreter:
         persist_dir = chroma_path or getattr(dsl, "CHROMA_PATH", None) or _default_chroma_dir()
 
         self.sample_bank = SampleBank(dsl, persist_dir)
+        self.raw_bank = RawScriptBank(self.sample_bank.client, self.sample_bank.embed_query, dsl)
+
         self.classifier = EntityContextClassifier(llm, dsl)
-        self.prompt_builder = PromptConstructor(dsl, self.sample_bank)
+        self.prompt_builder = PromptConstructor(dsl, self.sample_bank, self.raw_bank)
         self.synth = ProgramSynthesizer(llm, dsl)
         self.parser = DSLParser()
         self.corrector = CodeCorrector(dsl)
