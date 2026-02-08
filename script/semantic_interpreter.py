@@ -32,19 +32,19 @@ os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 os.environ.setdefault("CHROMADB_TELEMETRY", "0")
 os.environ.setdefault("CHROMA_TELEMETRY", "False")
 
-for name in (
+for _name in (
     "chromadb",
     "chromadb.api.segment",
     "chromadb.telemetry.product.posthog",
     "chromadb.telemetry",
 ):
-    lg = logging.getLogger(name)
-    lg.setLevel(logging.CRITICAL)
-    lg.propagate = False
+    _lg = logging.getLogger(_name)
+    _lg.setLevel(logging.CRITICAL)
+    _lg.propagate = False
 
-from utils import load_config, get_logger
-from llm_client import LLMClient
-from dsl_interface import DSLInterface
+from utils import load_config, get_logger  # noqa: E402
+from llm_client import LLMClient  # noqa: E402
+from dsl_interface import DSLInterface  # noqa: E402
 
 # --- Env config (OLLAMA_HOST) -------------------------------------------------
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -59,12 +59,12 @@ log = get_logger(level=loglevel)
 alog = get_logger(name="d", level=logging.DEBUG)
 
 # --- Chroma + embeddings ------------------------------------------------------
-from langchain_community.embeddings.ollama import OllamaEmbeddings
+from langchain_community.embeddings.ollama import OllamaEmbeddings  # noqa: E402
 
 try:
-    from chromadb import PersistentClient as ChromaPersistentClient
+    from chromadb import PersistentClient as ChromaPersistentClient  # type: ignore
 except Exception:
-    ChromaPersistentClient = None  # legacy path fallback below
+    ChromaPersistentClient = None  # legacy fallback below
 
 
 def _default_chroma_dir() -> str:
@@ -139,6 +139,10 @@ class EntityContextClassifier:
         if any(w in ut for w in ("pdb", "protein", "structure", "load", "insert", "fetch", "add")) and "structure" not in entities:
             entities.append("structure")
 
+        # De-dup while preserving order
+        seen = set()
+        entities = [e for e in entities if not (e in seen or seen.add(e))]
+
         for ent in entities:
             log.info(f"Entity assigned: {ent}")
         log.info(f"It is {requires_context} that we require context.")
@@ -191,7 +195,6 @@ class SampleBank:
             if hasattr(self.client, "get_or_create_collection"):
                 self.collection = self.client.get_or_create_collection(name)
             else:
-                # Legacy: create-first avoids "not created" info logs in many builds
                 try:
                     self.collection = self.client.create_collection(name)
                 except Exception:
@@ -204,19 +207,6 @@ class SampleBank:
             model="nomic-embed-text",
             **({"base_url": base_url} if base_url else {}),
         ).embed_query
-
-    def _count_utterances_and_subsamples_raw(self, metadatas: List[Dict[str, Any]]) -> Tuple[int, int]:
-        def parse_sub_samples(ss):
-            if isinstance(ss, str):
-                try:
-                    return json.loads(ss)
-                except json.JSONDecodeError:
-                    return []
-            return ss if isinstance(ss, list) else []
-
-        num_utter = len(metadatas or [])
-        num_subs = sum(len(parse_sub_samples(m.get("sub_samples", []))) for m in (metadatas or []))
-        return num_utter, num_subs
 
     def _entity_in_subsamples(self, entity: str, meta: Dict[str, Any]) -> bool:
         ss = meta.get("sub_samples", [])
@@ -348,7 +338,6 @@ class SampleBank:
 # -----------------------------------------------------------------------------
 # Raw script retrieval (PyMOL/VMD) -> prompt context helper
 # -----------------------------------------------------------------------------
-
 def _raw_trigger(utterance: str) -> bool:
     """True if NL query suggests PyMOL/VMD raw-script context would help."""
     u = (utterance or "").lower()
@@ -391,11 +380,16 @@ class RawScriptBank:
         self.collection_name = collection_name
         self.max_chars = max_chars
 
+        # If collection doesn't exist, don't crash the interpreter; just disable raw retrieval.
+        self.collection = None
         try:
-            # both APIs generally support get_collection; older builds may differ
             self.collection = self.client.get_collection(collection_name)
         except Exception:
-            self.collection = self.client.get_or_create_collection(collection_name)
+            try:
+                if hasattr(self.client, "get_or_create_collection"):
+                    self.collection = self.client.get_or_create_collection(collection_name)
+            except Exception:
+                self.collection = None
 
     @staticmethod
     def _best_window(doc: str, query: str, max_chars: int) -> str:
@@ -423,6 +417,9 @@ class RawScriptBank:
         return doc[start:end]
 
     def search(self, utterance: str, source: Optional[str] = None, k: int = 2) -> List[Dict[str, Any]]:
+        if self.collection is None:
+            return []
+
         norm = self.dsl.normalize_text(utterance) if hasattr(self.dsl, "normalize_text") else (utterance or "")
         emb = self.embed_query(norm)
 
@@ -515,7 +512,7 @@ class PromptConstructor:
                     usr_parts.append(f"\n# User Instruction: {ex.get('utterance','')}  # sim={score:.3f}")
                     if ss.get("context"):
                         usr_parts.append(f"# Context: {ss['context']}")
-                    usr_parts.append(ss.get("program", "").strip())
+                    usr_parts.append((ss.get("program", "") or "").strip())
 
         # --- Raw script context (PyMOL/VMD) ---
         use_raw = os.environ.get("MOLCOMMANDNL_USE_RAW_SCRIPTS", "1") == "1"
@@ -574,7 +571,8 @@ class DSLParser:
             line = line.strip()
             if not line or line.startswith("#") or line.startswith("await context."):
                 continue
-            m = re.match(r"(?:(\w+)\s*=\s*)?(\w+)\((.*)\)", line)
+
+            m = re.match(r"(?:(\w+)\s*=\s*)?(\w+)\((.*)\)\s*$", line)
             if not m:
                 continue
 
@@ -591,6 +589,7 @@ class DSLParser:
                     depth += 1
                 elif not in_q and ch == "]":
                     depth -= 1
+
                 if ch == "," and not in_q and depth == 0:
                     parts.append("".join(buf).strip())
                     buf = []
@@ -604,6 +603,7 @@ class DSLParser:
                     continue
                 k, v = p.split("=", 1)
                 k, v = k.strip(), v.strip()
+
                 if v.startswith("[") and v.endswith("]"):
                     try:
                         val = json.loads(v)
@@ -618,6 +618,7 @@ class DSLParser:
                         val = float(v) if "." in v else int(v)
                     except Exception:
                         val = v
+
                 args[k] = val
 
             ast.append({"var": var, "stmt": stmt, "args": args})
@@ -636,7 +637,9 @@ class DSLParser:
                 elif isinstance(v, list):
                     sv = "[" + ", ".join(f'"{x}"' if isinstance(x, str) else str(x) for x in v) + "]"
                 else:
-                    sv = f'"{v}"'
+                    # Escape quotes to keep DSL parseable
+                    s = str(v).replace('"', '\\"')
+                    sv = f'"{s}"'
                 kv.append(f"{k}={sv}")
             argstr = ", ".join(kv)
             lines.append(f"{(var + ' = ') if var else ''}{stmt}({argstr})")
@@ -691,7 +694,13 @@ class SemanticInterpreter:
         persist_dir = chroma_path or getattr(dsl, "CHROMA_PATH", None) or _default_chroma_dir()
 
         self.sample_bank = SampleBank(dsl, persist_dir)
-        self.raw_bank = RawScriptBank(self.sample_bank.client, self.sample_bank.embed_query, dsl)
+
+        # Raw scripts are optional; do not crash if missing/unsupported
+        self.raw_bank: Optional[RawScriptBank] = None
+        try:
+            self.raw_bank = RawScriptBank(self.sample_bank.client, self.sample_bank.embed_query, dsl)
+        except Exception:
+            self.raw_bank = None
 
         self.classifier = EntityContextClassifier(llm, dsl)
         self.prompt_builder = PromptConstructor(dsl, self.sample_bank, self.raw_bank)
