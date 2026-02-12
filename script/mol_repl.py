@@ -29,6 +29,18 @@ Other:
 - Persist last_all_sel and known selections across REPL runs (repl_state.json).
 - Pre-rewrite common shorthand NL like "load 1crn" -> "Load PDB ID 1crn"
 
+Option 2 (DEMO RAW):
+- If --demo-raw is set, bypass retrieval + DSL normalization/grammar/validation entirely.
+- Directly execute UnityMolX scripting commands over ZMQ (fetch/select/show/color/hide).
+- This mode is intended for demos when DSL rules/validators are getting in the way.
+
+IMPORTANT DEMO-RAW FIX:
+- Do NOT depend on getSelectionListString() (it often returns empty on some builds).
+- Maintain a dynamic in-session registry of selections/objects we created (DEMO_STATE).
+- Resolve targets using:
+    explicit sel (all_XXXX) > pdbid mapping > last_sel > "all"
+  so the demo stays dynamic without hardcoding a fixed vocabulary.
+
 Notes on Chroma logging:
 - We must set telemetry env vars and logger levels BEFORE importing anything that
   might import/initialize chromadb (e.g., semantic_interpreter / unitymol_copilot).
@@ -43,6 +55,7 @@ import json
 import argparse
 import re
 import logging
+import importlib.util
 from pathlib import Path
 from importlib import import_module
 
@@ -91,6 +104,471 @@ except Exception:
     normalize_dsl = None
 
 
+# =============================================================================
+# DEMO RAW MODE (Option 2): UnityMol direct execution bypassing all DSL parsing
+# =============================================================================
+
+# Dynamic, in-session registry of what we created / focused.
+# This is NOT a fixed vocabulary. It is runtime state.
+DEMO_STATE = {
+    "known_selections": set(),   # selections we created or saw
+    "pdb_to_sel": {},            # "1crn" -> "all_1crn"
+    "last_sel": "all",           # current focus
+    "last_pdb": None,            # last pdbid mentioned/loaded
+}
+
+
+def _demo_load_unitymol():
+    """
+    Load UnityMolZMQ bridge from the user's UnityMol-ScriptCollection path.
+
+    This keeps demo mode independent of unitymol_copilot execution/validation
+    and avoids any DSL/grammar/validator rules.
+    """
+    p = Path.home() / "UnityMol-ScriptCollection/zmq/unitymol_zmq.py"
+    if not p.exists():
+        raise FileNotFoundError(
+            f"UnityMol bridge not found at: {p}\n"
+            "Expected UnityMol-ScriptCollection installed in your home directory."
+        )
+
+    spec = importlib.util.spec_from_file_location("unitymol_zmq", p)
+    um = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(um)
+
+    u = um.UnityMolZMQ(host="localhost", port=5555)
+    ok = u.connect()
+    if not ok:
+        raise RuntimeError("Could not connect to UnityMolZMQ at tcp://localhost:5555")
+    return u
+
+
+def _demo_send_script(unitymol, script: str):
+    """
+    Send a raw UnityMol scripting command string to the ZMQ bridge.
+
+    Different UnityMolZMQ wrappers expose different method names. We try a set of
+    common ones.
+    """
+    candidates = (
+        "sendCommand",
+        "send_command",
+        "send",
+        "command",
+        "exec",
+        "execute",
+        "run",
+        "eval",
+        "sendPython",
+        "send_python",
+    )
+    for name in candidates:
+        fn = getattr(unitymol, name, None)
+        if callable(fn):
+            return fn(script)
+
+    raise AttributeError(
+        "UnityMolZMQ wrapper has no compatible send method "
+        f"(tried: {', '.join(candidates)})."
+    )
+
+
+def _demo_bool(v: bool) -> str:
+    """UnityMol scripting uses capitalized True/False (Python-style)."""
+    return "True" if v else "False"
+
+
+def _demo_fetch(unitymol, pdbid: str, use_mmcif: bool = True):
+    """
+    Fetch a PDB from the internet via UnityMol.
+
+    If the wrapper does not expose .fetch(), fall back to sending:
+        fetch("<pdbid>", True/False)
+    """
+    for name in ("fetch", "fetchPDB", "fetch_pdb", "Fetch"):
+        fn = getattr(unitymol, name, None)
+        if callable(fn):
+            try:
+                return fn(pdbid, use_mmcif)
+            except TypeError:
+                return fn(pdbid)
+
+    return _demo_send_script(unitymol, f'fetch("{pdbid}", {_demo_bool(use_mmcif)})')
+
+
+def _demo_select(unitymol, query: str, alias: str):
+    """
+    Create/alias a selection in UnityMol.
+
+    Preferred wrapper call:
+        select(query, alias, True, False, True)
+
+    Fallback scripting string:
+        select("<query>", "<alias>", True, False, True)
+    """
+    fn = getattr(unitymol, "select", None)
+    if callable(fn):
+        try:
+            return fn(query, alias, True, False, True)
+        except TypeError:
+            return fn(query, alias)
+
+    return _demo_send_script(unitymol, f'select("{query}", "{alias}", True, False, True)')
+
+
+def _demo_rep_variants(rep: str) -> list[str]:
+    """
+    Try multiple representation identifiers. UnityMol builds differ:
+    some accept "c", some accept "cartoon", etc.
+    """
+    rep = (rep or "").lower()
+    if rep == "c":
+        return ["c", "cartoon"]
+    if rep == "s":
+        return ["s", "surface"]
+    if rep == "l":
+        return ["l", "lines"]
+    if rep == "b":
+        return ["b", "spheres", "balls"]
+    return [rep]
+
+
+def _demo_color_variants(color: str) -> list[str]:
+    """
+    Try name + hex fallback (some UnityMol builds accept hex colors).
+    """
+    m = {
+        "red": "#ff0000",
+        "green": "#00ff00",
+        "blue": "#0000ff",
+        "yellow": "#ffff00",
+        "orange": "#ff8800",
+        "purple": "#8000ff",
+        "cyan": "#00ffff",
+        "magenta": "#ff00ff",
+        "white": "#ffffff",
+        "black": "#000000",
+        "gray": "#808080",
+    }
+    c = (color or "").lower()
+    out = [c] if c else []
+    if c in m:
+        out.append(m[c])
+    return out
+
+
+def _demo_show(unitymol, sel: str, rep: str):
+    """
+    Show selection with representation. Tries rep variants for robustness.
+    """
+    fn = getattr(unitymol, "showSelection", None)
+    last_err = None
+    for r in _demo_rep_variants(rep):
+        try:
+            if callable(fn):
+                return fn(sel, r)
+            return _demo_send_script(unitymol, f'showSelection("{sel}", "{r}")')
+        except Exception as e:
+            last_err = e
+    return {"success": False, "stdout": f"showSelection failed ({last_err})"}
+
+
+def _demo_hide(unitymol, sel: str, rep: str | None = None):
+    """
+    Hide selection. Some builds support hideSelection(sel, rep).
+    Try both forms.
+    """
+    fn = getattr(unitymol, "hideSelection", None)
+
+    # 1) Try hideSelection(sel)
+    try:
+        if callable(fn):
+            return fn(sel)
+        return _demo_send_script(unitymol, f'hideSelection("{sel}")')
+    except Exception:
+        pass
+
+    # 2) Try hideSelection(sel, rep) variants
+    if rep is not None:
+        last_err = None
+        for r in _demo_rep_variants(rep):
+            try:
+                if callable(fn):
+                    return fn(sel, r)
+                return _demo_send_script(unitymol, f'hideSelection("{sel}", "{r}")')
+            except Exception as e:
+                last_err = e
+        return {"success": False, "stdout": f"hideSelection(rep) failed ({last_err})"}
+
+    return {"success": False, "stdout": "hideSelection failed"}
+
+
+def _demo_color(unitymol, sel: str, rep: str, color: str):
+    """
+    Color selection for a representation. Tries rep variants and color variants.
+    """
+    fn = getattr(unitymol, "colorSelection", None)
+    last_err = None
+
+    for r in _demo_rep_variants(rep):
+        for c in _demo_color_variants(color):
+            try:
+                if callable(fn):
+                    return fn(sel, r, c)
+                return _demo_send_script(unitymol, f'colorSelection("{sel}", "{r}", "{c}")')
+            except Exception as e:
+                last_err = e
+
+    return {"success": False, "stdout": f"colorSelection failed ({last_err})"}
+
+
+def _demo_get_selections(unitymol) -> list[str]:
+    """
+    Best-effort selection listing.
+
+    WARNING: On some UnityMol builds/wrappers, getSelectionListString()
+    returns empty or log-only output. We keep this for debugging, but DEMO-RAW
+    functionality must NOT depend on it.
+    """
+    resp = None
+    fn = getattr(unitymol, "getSelectionListString", None)
+    if callable(fn):
+        try:
+            resp = fn()
+        except Exception:
+            resp = None
+
+    if resp is None:
+        try:
+            resp = _demo_send_script(unitymol, "getSelectionListString()")
+        except Exception:
+            return []
+
+    if isinstance(resp, dict):
+        s = f"{resp.get('result', '')} {resp.get('stdout', '')}"
+    else:
+        s = str(resp)
+
+    s = re.sub(r"\[Log\]\s*", " ", s)
+    s = re.sub(r"<[^>]+>", " ", s)
+    items = re.split(r"[\s,;]+", (s or "").strip())
+    items = [x for x in items if x and re.match(r"^[A-Za-z0-9_]+$", x)]
+    return items
+
+
+def _demo_find_pdbid(text: str) -> str | None:
+    """Find a PDB id like 1crn / 1kx2 in free text."""
+    m = re.search(r"\b([0-9][a-zA-Z0-9]{3})\b", text or "")
+    return m.group(1).lower() if m else None
+
+
+def _demo_rep_code(text: str) -> str:
+    """
+    Map rep keywords to UnityMol rep codes used by showSelection/colorSelection.
+
+    Common UnityMolX scripting codes used in your logs:
+      c = cartoon
+      s = surface
+      l = lines
+      b = spheres/balls (if supported)
+    """
+    t = (text or "").lower()
+    if "cartoon" in t or "ribbon" in t:
+        return "c"
+    if "surface" in t or "surfaces" in t:
+        return "s"
+    if "lines" in t or "wire" in t or "wireframe" in t:
+        return "l"
+    if "sphere" in t or "spheres" in t or "ball" in t or "balls" in t:
+        return "b"
+    return "c"
+
+
+def _demo_color_name(text: str) -> str | None:
+    """Extract a basic color name from free text."""
+    colors = [
+        "red", "blue", "green", "yellow", "orange",
+        "purple", "cyan", "magenta", "white", "black",
+        "grey", "gray",
+    ]
+    t = (text or "").lower()
+    for c in colors:
+        if re.search(rf"\b{c}\b", t):
+            return "gray" if c == "grey" else c
+    return None
+
+
+def _demo_target_selection(text: str, pdbid: str | None = None) -> str | None:
+    """
+    Determine selection name to use:
+    - If user types all_1crn explicitly, use that.
+    - Else if pdbid is known, use all_<pdbid>.
+    """
+    m = re.search(r"\b(all_[a-zA-Z0-9_]+)\b", text or "")
+    if m:
+        return m.group(1)
+    if pdbid:
+        return f"all_{pdbid}"
+    return None
+
+
+def _demo_resolve_sel(pdbid: str | None, sel: str | None) -> str:
+    """
+    Resolve the best target selection dynamically without relying on UnityMol selection listing.
+
+    Priority:
+      1) explicit sel (e.g. all_1crn)
+      2) pdbid -> known mapping
+      3) last focused selection
+      4) fallback "all"
+    """
+    if sel:
+        DEMO_STATE["last_sel"] = sel
+        return sel
+
+    if pdbid and pdbid in DEMO_STATE["pdb_to_sel"]:
+        DEMO_STATE["last_sel"] = DEMO_STATE["pdb_to_sel"][pdbid]
+        return DEMO_STATE["last_sel"]
+
+    last_sel = DEMO_STATE.get("last_sel") or "all"
+    return last_sel
+
+
+def _demo_register_loaded(pdbid: str, alias: str) -> None:
+    """Update dynamic demo registry after a successful load/select."""
+    DEMO_STATE["known_selections"].add(alias)
+    DEMO_STATE["pdb_to_sel"][pdbid] = alias
+    DEMO_STATE["last_sel"] = alias
+    DEMO_STATE["last_pdb"] = pdbid
+
+
+def _demo_should_skip_fetch(pdbid: str, alias: str) -> bool:
+    """
+    Decide if we should skip fetch for this pdbid.
+
+    Since UnityMol selection listing may be unreliable, we prefer our local registry:
+    - If we've already registered alias in this session, skip.
+    """
+    if alias in DEMO_STATE["known_selections"]:
+        return True
+    if DEMO_STATE["pdb_to_sel"].get(pdbid) == alias:
+        return True
+    return False
+
+
+def _demo_exec(unitymol, user_line: str) -> None:
+    """
+    Execute a single demo command by directly calling UnityMolZMQ methods.
+
+    Supported intents (very lightweight heuristics):
+      - load/fetch <pdbid>
+      - show <pdbid> <rep>
+      - color <pdbid> <rep> <color>
+      - hide <pdbid>  (or hide all_<pdbid>)
+
+    IMPORTANT:
+    - We do NOT auto-load on show/color/hide (avoid 1crn_2, 1crn_3, ... confusion).
+    - We DO resolve targets dynamically using DEMO_STATE even if selection listing is broken.
+    """
+    line = (user_line or "").strip()
+    low = line.lower()
+
+    if not line:
+        return
+
+    if low in {"help", "?"}:
+        print("DEMO-RAW examples:")
+        print("  load 1crn")
+        print("  show 1crn cartoon")
+        print("  color 1crn cartoon red")
+        print("  hide 1crn")
+        print("Also accepts explicit selections like: show all_1crn cartoon")
+        print("Tip: 'state' prints the local demo registry; 'selections' tries UnityMol listing.")
+        return
+
+    if low in {"state", "st"}:
+        print("DEMO-RAW state:")
+        print("  last_sel:", DEMO_STATE.get("last_sel"))
+        print("  last_pdb:", DEMO_STATE.get("last_pdb"))
+        print("  pdb_to_sel:", DEMO_STATE.get("pdb_to_sel"))
+        print("  known_selections:", sorted(DEMO_STATE.get("known_selections", set())))
+        return
+
+    if low in {"selections", "ls"}:
+        sels = _demo_get_selections(unitymol)
+        print("DEMO-RAW selections (UnityMol-reported, may be empty):", sels)
+        return
+
+    # Allow multiple commands separated by ';'
+    if ";" in line:
+        for part in [x.strip() for x in line.split(";") if x.strip()]:
+            _demo_exec(unitymol, part)
+        return
+
+    pdbid = _demo_find_pdbid(line)
+    rep = _demo_rep_code(line)
+    color = _demo_color_name(line)
+    sel = _demo_target_selection(line, pdbid=pdbid)
+
+    # --- LOAD ---
+    if "load" in low or "fetch" in low:
+        if not pdbid:
+            print("DEMO-RAW: could not find a PDB id (expected like 1crn).")
+            return
+
+        alias = f"all_{pdbid}"
+
+        if _demo_should_skip_fetch(pdbid, alias):
+            print(f"DEMO-RAW: already loaded in this session (alias {alias}); skipping fetch.")
+            DEMO_STATE["last_sel"] = alias
+            DEMO_STATE["last_pdb"] = pdbid
+            return
+
+        print(f"DEMO-RAW EXEC: fetch('{pdbid}', use_mmcif=True)")
+        print(_demo_fetch(unitymol, pdbid, True))
+
+        print(f"DEMO-RAW EXEC: select('all', '{alias}', True, False, True)")
+        print(_demo_select(unitymol, "all", alias))
+
+        _demo_register_loaded(pdbid, alias)
+        return
+
+    # Resolve target for non-load commands
+    target = _demo_resolve_sel(pdbid, sel)
+
+    # If user referenced a pdbid but never loaded it, be explicit
+    if pdbid and pdbid not in DEMO_STATE["pdb_to_sel"] and (("show" in low) or ("hide" in low) or ("color" in low)):
+        print(f"DEMO-RAW: '{pdbid}' not loaded in this session. Run: load {pdbid}")
+        return
+
+    # --- SHOW ---
+    if "show" in low:
+        print(f"DEMO-RAW EXEC: showSelection('{target}', '{rep}')")
+        print(_demo_show(unitymol, target, rep))
+        return
+
+    # --- COLOR ---
+    if "color" in low or "paint" in low or "make" in low:
+        if not color:
+            print("DEMO-RAW: no color found (try 'red', 'blue', etc.).")
+            return
+        print(f"DEMO-RAW EXEC: colorSelection('{target}', '{rep}', '{color}')")
+        print(_demo_color(unitymol, target, rep, color))
+        return
+
+    # --- HIDE ---
+    if "hide" in low:
+        print(f"DEMO-RAW EXEC: hideSelection('{target}')")
+        print(_demo_hide(unitymol, target, rep))
+        return
+
+    print("DEMO-RAW: command not recognized. Type 'help'.")
+
+
+# =============================================================================
+# Normal DSL-based REPL (existing behavior)
+# =============================================================================
 def load_mol_dsl():
     """
     Load the molcommand DSL object/factory from molcommand/dsl_definition.py.
@@ -202,14 +680,14 @@ def repair_missing_sel_args(dsl_text: str, last_all_sel: str) -> str:
 
     # show(rep="surface") -> show(sel="...", rep="surface")
     dsl_text = re.sub(
-        r'\bshow\(\s*rep\s*=',
+        r"\bshow\(\s*rep\s*=",
         f'show(sel="{sel}", rep=',
         dsl_text,
     )
 
     # color_by_chain(target="surface") -> color_by_chain(sel="...", target="surface")
     dsl_text = re.sub(
-        r'\bcolor_by_chain\(\s*target\s*=',
+        r"\bcolor_by_chain\(\s*target\s*=",
         f'color_by_chain(sel="{sel}", target=',
         dsl_text,
     )
@@ -341,7 +819,27 @@ def drop_unknown_selections_in_dev_loose(dsl_text: str, known_sels: set[str]) ->
     return "\n".join(kept)
 
 
-async def run_repl(entity_hint=None, with_context=False):
+async def run_repl(entity_hint=None, with_context=False, demo_raw=False):
+    # --- Option 2: DEMO RAW path ---
+    if demo_raw:
+        unitymol = _demo_load_unitymol()
+        print("molREPL (DEMO-RAW) — bypassing DSL/validator; type 'help' for examples; 'quit' to exit.")
+        while True:
+            try:
+                q = input("DEMO> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+
+            if q.lower() in ("quit", "exit"):
+                break
+            if not q:
+                continue
+
+            _demo_exec(unitymol, q)
+        return
+
+    # --- Normal DSL-based path ---
     chroma_dir = (
         os.environ.get("MOLCOMMANDNL_CHROMA_DIR")
         or os.environ.get("CHROMA_PATH")
@@ -525,6 +1023,11 @@ def main():
         action="store_true",
         help="Print DEV normalizer steps when it changes the DSL (sets MOLCOMMANDNL_SHOW_NORM=1).",
     )
+    ap.add_argument(
+        "--demo-raw",
+        action="store_true",
+        help="DEMO MODE: bypass retrieval + DSL normalization/grammar/validation; execute UnityMolX directly over ZMQ.",
+    )
 
     args = ap.parse_args()
 
@@ -535,7 +1038,13 @@ def main():
     if args.show_norm:
         os.environ["MOLCOMMANDNL_SHOW_NORM"] = "1"
 
-    asyncio.run(run_repl(entity_hint=args.entity, with_context=args.with_context))
+    asyncio.run(
+        run_repl(
+            entity_hint=args.entity,
+            with_context=args.with_context,
+            demo_raw=args.demo_raw,
+        )
+    )
 
 
 if __name__ == "__main__":
