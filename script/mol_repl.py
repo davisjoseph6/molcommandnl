@@ -35,6 +35,10 @@ Option 2 (DEMO RAW):
 - If --demo-raw is set, bypass retrieval + DSL normalization/grammar/validation entirely.
 - Directly execute UnityMolX scripting commands over ZMQ.
 
+Context tracing / demo instrumentation:
+- MOLCOMMANDNL_TRACE_CONTEXT=1 prints gate/history/retrieval decisions and payload info.
+- MOLCOMMANDNL_FORCE_CONTEXT=1 forces requires_ctx=True (useful for live demos).
+
 Notes on Chroma logging:
 - We must set telemetry env vars and logger levels BEFORE importing anything that
   might import/initialize chromadb.
@@ -80,6 +84,28 @@ HERE = os.path.dirname(__file__)
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 sys.path.append(HERE)   # semantic_interpreter.py
 sys.path.append(ROOT)   # repo root
+
+
+def _env_flag(name: str) -> bool:
+    """Return True if an env var is set to a truthy value."""
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _trace_context_enabled() -> bool:
+    """Enable verbose context tracing for debugging/demo."""
+    return _env_flag("MOLCOMMANDNL_TRACE_CONTEXT")
+
+
+def _ctx_trace(msg: str) -> None:
+    """Print a context-trace line only when tracing is enabled."""
+    if _trace_context_enabled():
+        print(msg)
+
+
+def _short_exc(e: Exception) -> str:
+    """Compact exception formatting for trace logs."""
+    return f"{type(e).__name__}: {e}"
+
 
 # --- interpreter + LLM shim ---
 from semantic_interpreter import SemanticInterpreter, LLMClient  # noqa: E402
@@ -991,13 +1017,16 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
     llm = LLMClient()
 
     gate = None
+    gate_init_err: Optional[Exception] = None
     if policy and ContextGate is not None:
         try:
             gate = ContextGate(policy, llm)
-        except Exception:
+        except Exception as e:
             gate = None
+            gate_init_err = e
 
     history = None
+    history_init_err: Optional[Exception] = None
     if ContextHistory is not None:
         try:
             jsonl_path = _policy_get(policy, "context_retrieval.history_store.jsonl_path", None)
@@ -1010,8 +1039,9 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
                 }
             }
             history = ContextHistory(config=hist_cfg)
-        except Exception:
+        except Exception as e:
             history = None
+            history_init_err = e
 
     vec = None
     vec_enabled = bool(_policy_get(policy, "context_retrieval.vector_store.enabled", False))
@@ -1034,9 +1064,25 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
         if ContextGate is None or gate is None:
             print("[policy] context_gate unavailable (missing deps/import error); continuing without gate.")
         if ContextHistory is None or history is None:
-            print("[policy] context_history unavailable (missing deps/import error); continuing without story.")
+            print("[policy] context_history unavailable (missing deps/import error); continuing without history.")
         if vec_enabled:
             print(f"[policy] vector_store={'on' if (vec and vec.enabled) else 'off'}")
+
+    if _trace_context_enabled():
+        _ctx_trace(f"[trace] policy_loaded={bool(policy)} path={policy_path}")
+        _ctx_trace(f"[trace] retrieval_enabled={retrieval_enabled} recent_turns={recent_turns} top_k={top_k}")
+        _ctx_trace(f"[trace] gate_class_imported={ContextGate is not None} gate_obj={'ON' if gate is not None else 'OFF'}")
+        if gate_init_err is not None:
+            _ctx_trace(f"[trace] gate_init_error={_short_exc(gate_init_err)}")
+        _ctx_trace(
+            f"[trace] history_class_imported={ContextHistory is not None} "
+            f"history_obj={'ON' if history is not None else 'OFF'}"
+        )
+        if history_init_err is not None:
+            _ctx_trace(f"[trace] history_init_error={_short_exc(history_init_err)}")
+        _ctx_trace(f"[trace] vec_enabled_cfg={vec_enabled} vec_obj={'ON' if (vec and vec.enabled) else 'OFF'}")
+        if _env_flag("MOLCOMMANDNL_FORCE_CONTEXT"):
+            _ctx_trace("[trace] MOLCOMMANDNL_FORCE_CONTEXT=1 (demo mode)")
 
     if entity_hint:
         print(f"[hint] default entity: {entity_hint}")
@@ -1094,16 +1140,31 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
         if gate is not None:
             try:
                 dec = gate.decide(q, stats)
-                if os.environ.get("MOLCOMMANDNL_TRACE_CONTEXT") == "1":
-                    print(f"[gate] requires_ctx={requires_ctx} categories={categories} stats={stats}")
-                categories = list(dec.categories or [])
-                requires_ctx = bool(dec.requires_context)
-            except Exception:
+                categories = list(getattr(dec, "categories", []) or [])
+                requires_ctx = bool(getattr(dec, "requires_context", False))
+            except Exception as e:
                 categories = []
                 requires_ctx = False
+                _ctx_trace(f"[gate] decide_error={_short_exc(e)}")
+        else:
+            _ctx_trace("[gate] gate_obj=OFF")
+
+        if _env_flag("MOLCOMMANDNL_FORCE_CONTEXT"):
+            requires_ctx = True
+            _ctx_trace("[gate] requires_ctx forced -> True (MOLCOMMANDNL_FORCE_CONTEXT=1)")
+
+        _ctx_trace(
+            f"[gate] gate_obj={'ON' if gate is not None else 'OFF'} "
+            f"requires_ctx={requires_ctx} categories={categories} stats={stats}"
+        )
 
         context_payload = dict(base_context or {})
         turn_context_block = ""
+
+        _ctx_trace(
+            f"[ctx-check] retrieval_enabled={retrieval_enabled} "
+            f"requires_ctx={requires_ctx} history_is_none={history is None}"
+        )
 
         if retrieval_enabled and requires_ctx and history is not None:
             chosen_turns = _select_context_turns(
@@ -1114,7 +1175,11 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
                 vector_store=vec,
             )
             header = "Context (recent & relevant):"
-            turn_context_block = _format_context_turns(chosen_turns, header=header, max_chars=max_ctx_chars)
+            turn_context_block = _format_context_turns(
+                chosen_turns,
+                header=header,
+                max_chars=max_ctx_chars,
+            )
 
             context_payload.update({
                 "scene_stats": stats,
@@ -1123,7 +1188,25 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
                 "history": turn_context_block,
             })
 
+            _ctx_trace(
+                f"[ctx-build] chosen_turns={len(chosen_turns)} "
+                f"history_chars={len(turn_context_block)}"
+            )
+
         context_for_interp = context_payload if context_payload else None
+
+        if _trace_context_enabled():
+            if context_for_interp is None:
+                _ctx_trace("[ctx] NONE")
+            else:
+                _ctx_trace(f"[ctx] keys: {sorted(context_for_interp.keys())}")
+                if "last_all_sel" in context_for_interp:
+                    _ctx_trace(f"[ctx] last_all_sel: {context_for_interp.get('last_all_sel')}")
+                h = context_for_interp.get("history")
+                if isinstance(h, str):
+                    _ctx_trace(f"[ctx] history_chars: {len(h)}")
+                    if h.strip():
+                        _ctx_trace("[ctx] history:\n" + h)
 
         turn_id = None
         if history is not None:
@@ -1138,19 +1221,12 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
                         "categories": categories,
                     },
                 )
-            except Exception:
+                _ctx_trace(f"[history] add_user turn_id={turn_id}")
+            except Exception as e:
                 turn_id = None
+                _ctx_trace(f"[history] add_user_error={_short_exc(e)}")
 
         interp = si.interpret(q, entity_hint=entity_hint, context=context_for_interp)
-        if os.environ.get("MOLCOMMANDNL_TRACE_CONTEXT") == "1":
-            if context_for_interp is None:
-                print("[ctx] NONE")
-            else:
-                print("[ctx] keys:", sorted(context_for_interp.keys()))
-                h = context_for_interp.get("history")
-                if isinstance(h, str) and h.strip():
-                    print("[ctx] history:\n" + h)
-                    print("[ctx] last_all_sel:", context_for_interp.get("last_all_sel"))
 
         dsl_prog = cleaned(
             getattr(interp, "cleaned_program", "")
@@ -1176,8 +1252,9 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
                         did_update_scene=False,
                         meta={"note": "no_dsl"},
                     )
-                except Exception:
-                    pass
+                    _ctx_trace(f"[history] add_execution turn_id={turn_id} note=no_dsl")
+                except Exception as e:
+                    _ctx_trace(f"[history] add_execution_error(no_dsl)={_short_exc(e)}")
             continue
 
         if normalize_dsl is not None:
@@ -1233,8 +1310,9 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
                             did_update_scene=False,
                             meta={"note": "salvage_empty"},
                         )
-                    except Exception:
-                        pass
+                        _ctx_trace(f"[history] add_execution turn_id={turn_id} note=salvage_empty")
+                    except Exception as e:
+                        _ctx_trace(f"[history] add_execution_error(salvage_empty)={_short_exc(e)}")
                 continue
 
             print("DSL> (salvaged)\n" + dsl_prog)
@@ -1255,8 +1333,9 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
                         did_update_scene=False,
                         meta={"note": "validator_error", "errors": v.get("errors")},
                     )
-                except Exception:
-                    pass
+                    _ctx_trace(f"[history] add_execution turn_id={turn_id} note=validator_error")
+                except Exception as e:
+                    _ctx_trace(f"[history] add_execution_error(validator_error)={_short_exc(e)}")
             continue
 
         out = await execute_dsl(dsl_prog)
@@ -1272,8 +1351,10 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
                     if out.get("error"):
                         okish = False
                 did_update_scene = bool(okish) and bool(history.infer_scene_update_from_dsl(dsl_prog))
-            except Exception:
+                _ctx_trace(f"[history] infer_scene_update did_update_scene={did_update_scene}")
+            except Exception as e:
                 did_update_scene = False
+                _ctx_trace(f"[history] infer_scene_update_error={_short_exc(e)}")
 
         if history is not None and turn_id is not None:
             try:
@@ -1285,8 +1366,9 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
                     did_update_scene=did_update_scene,
                     meta={"scene_stats": stats},
                 )
-            except Exception:
-                pass
+                _ctx_trace(f"[history] add_execution turn_id={turn_id} note=normal")
+            except Exception as e:
+                _ctx_trace(f"[history] add_execution_error(normal)={_short_exc(e)}")
 
             if vec is not None and vec.enabled:
                 try:
@@ -1296,8 +1378,9 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
                         text=doc,
                         meta={"turn_id": turn_id, "updates": int(stats.get("updates", 0))},
                     )
-                except Exception:
-                    pass
+                    _ctx_trace(f"[vec] upsert_turn turn_id={turn_id}")
+                except Exception as e:
+                    _ctx_trace(f"[vec] upsert_turn_error={_short_exc(e)}")
 
         m_pdb = re.search(
             r'add_structure\(\s*PDBID\s*=\s*"([0-9A-Za-z]{4})"\s*\)',
@@ -1314,6 +1397,7 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
                         chroma_dir,
                         {"last_all_sel": last_all_sel, "known_sels": sorted(known_sels)},
                     )
+                    _ctx_trace(f"[state] updated from add_structure -> last_all_sel={last_all_sel}")
 
         focused = maybe_focus_last_all_sel_from_program(dsl_prog)
         if focused and focused != last_all_sel:
@@ -1323,6 +1407,7 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
                 chroma_dir,
                 {"last_all_sel": last_all_sel, "known_sels": sorted(known_sels)},
             )
+            _ctx_trace(f"[state] focused from program -> last_all_sel={last_all_sel}")
 
 
 def main():
