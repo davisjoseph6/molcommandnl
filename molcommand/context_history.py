@@ -437,29 +437,44 @@ class ContextHistory:
     # Update inference helper
     # ----------------
     def infer_scene_update_from_dsl(self, dsl: str) -> bool:
-        """
-        Best-effort inference: decide if a DSL string likely updates the scene.
+    """
+    Best-effort inference: decide if a DSL string likely updates the scene.
 
-        Prefer using explicit signals from your pipeline. This is only a fallback.
-        """
-        dsl = dsl.strip().lower()
-        if not dsl:
-            return False
+    Prefer using explicit signals from your pipeline. This is only a fallback.
 
-        heur = self._cfg("context.update_heuristics", {})
-        verbs = heur.get("dsl_update_verbs", [])
-        if not isinstance(verbs, list):
-            verbs = []
+    Patch note:
+    - Handles underscored function names like add_structure(...) by matching both
+      the full function name AND underscore-split tokens (e.g., "add", "structure").
+    """
+    text = (dsl or "").strip().lower()
+    if not text:
+        return False
 
-        # Extremely lightweight: does any configured verb appear as a word boundary?
-        for v in verbs:
-            v = str(v).strip().lower()
-            if not v:
-                continue
-            if re.search(rf"\b{re.escape(v)}\b", dsl):
+    heur = self._cfg("context.update_heuristics", {})
+    verbs = heur.get("dsl_update_verbs", [])
+    if not isinstance(verbs, list):
+        verbs = []
+
+    verb_set = {str(v).strip().lower() for v in verbs if str(v).strip()}
+    if not verb_set:
+        return False
+
+    # 1) Function-call aware detection (fixes add_structure / color_by_chain / etc.)
+    #    Example matches: add_structure(...), show(...), color_by_chain(...)
+    fn_names = re.findall(r"([a-z_][a-z0-9_]*)\s*\(", text)
+    for fn in fn_names:
+        if fn in verb_set:
+            return True
+        for part in fn.split("_"):
+            if part in verb_set:
                 return True
 
-        return False
+    # 2) Fallback legacy word-boundary scan
+    for v in verb_set:
+        if re.search(rf"\b{re.escape(v)}\b", text):
+            return True
+
+    return False
 
     # ----------------------------
     # Internals

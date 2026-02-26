@@ -185,6 +185,10 @@ class HistoryVectorStore:
 
     It stores "turn documents" as:
         User: <utterance>\nExec: <dsl>
+
+    Patch notes:
+    - exposes init diagnostics (init_stage, init_error)
+    - traces why vector store is OFF
     """
 
     def __init__(self, chroma_dir: str, collection: str) -> None:
@@ -192,33 +196,54 @@ class HistoryVectorStore:
         self._client = None
         self._collection = None
 
+        self.init_stage = "start"
+        self.init_error: Optional[str] = None
+        self.embedding_source: Optional[str] = None
+
         try:
             import chromadb  # type: ignore
-        except Exception:
+        except Exception as e:
+            self.init_stage = "import_chromadb"
+            self.init_error = _short_exc(e)
             return
 
-        embed_fn = self._try_get_embedding_function()
+        embed_fn, embed_diag, embed_src = self._try_get_embedding_function()
+        self.embedding_source = embed_src
         if embed_fn is None:
+            self.init_stage = "embedding_function"
+            self.init_error = embed_diag or "No usable embedding function found"
             return
 
         try:
+            self.init_stage = "persistent_client"
             self._client = chromadb.PersistentClient(path=chroma_dir)
+
+            self.init_stage = "collection"
             try:
                 self._collection = self._client.get_or_create_collection(
                     name=collection,
                     embedding_function=embed_fn,
                 )
             except TypeError:
+                # Some Chroma versions don't accept embedding_function here.
                 self._collection = self._client.get_or_create_collection(name=collection)
                 self._collection._embedding_function = embed_fn  # type: ignore[attr-defined]
+
             self.enabled = True
-        except Exception:
+            self.init_stage = "ready"
+            self.init_error = None
+        except Exception as e:
             self.enabled = False
+            self.init_stage = "collection_init"
+            self.init_error = _short_exc(e)
 
     @staticmethod
     def _try_get_embedding_function():
         """
         Try to locate an embedding function in the repo, without hardcoding dependencies.
+
+        Returns:
+            (embed_fn_or_none, diagnostic_string, source_path_or_none)
 
         Priority:
         - script/get_embedding_function.py (used elsewhere in your repo)
@@ -228,21 +253,32 @@ class HistoryVectorStore:
             os.path.join(ROOT, "get_embedding_function.py"),
         ]
 
+        diagnostics: List[str] = []
+
         for p in candidates:
             if not os.path.exists(p):
+                diagnostics.append(f"{p}: not found")
                 continue
             try:
                 spec = importlib.util.spec_from_file_location("get_embedding_function", p)
-                mod = importlib.util.module_from_spec(spec)
-                assert spec.loader is not None
-                spec.loader.exec_module(mod)
-                fn = getattr(mod, "get_embedding_function", None)
-                if callable(fn):
-                    return fn()
-            except Exception:
-                continue
+                if spec is None or spec.loader is None:
+                    diagnostics.append(f"{p}: could not create import spec")
+                    continue
 
-        return None
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+
+                fn = getattr(mod, "get_embedding_function", None)
+                if not callable(fn):
+                    diagnostics.append(f"{p}: get_embedding_function not callable/missing")
+                    continue
+
+                embed_fn = fn()
+                return embed_fn, None, p
+            except Exception as e:
+                diagnostics.append(f"{p}: {_short_exc(e)}")
+
+        return None, " | ".join(diagnostics), None
 
     def upsert_turn(self, turn_id: int, text: str, meta: Optional[Dict[str, Any]] = None) -> None:
         if not self.enabled or self._collection is None:
@@ -893,6 +929,40 @@ def drop_unknown_selections_in_dev_loose(dsl_text: str, known_sels: Set[str]) ->
     kept = _dedupe_preserve_order(kept)
     return "\n".join(kept)
 
+def drop_spurious_unloadable_add_structure(dsl_text: str) -> str:
+    """
+    Drop malformed hallucinated add_structure(...) lines that cannot be validly executed
+    because they omit both PDBID= and FILEPATH=.
+
+    Examples dropped:
+      add_structure()
+      add_structure(name="example")
+
+    This prevents otherwise-valid follow-up lines (e.g., show/cartoon) from failing
+    validation due to a bogus prepended add_structure line.
+    """
+    lines = _split_lines(dsl_text)
+    if not lines:
+        return dsl_text
+
+    kept: List[str] = []
+    dropped: List[str] = []
+
+    for ln in lines:
+        if re.match(r"^\s*add_structure\s*\(", ln):
+            has_pdb = re.search(r"\bPDBID\s*=", ln) is not None
+            has_file = re.search(r"\bFILEPATH\s*=", ln) is not None
+            if not (has_pdb or has_file):
+                dropped.append(ln)
+                continue
+        kept.append(ln)
+
+    if dropped:
+        _ctx_trace("[rewrite] dropped malformed add_structure lines: " + repr(dropped))
+
+    kept = _dedupe_preserve_order(kept)
+    return "\n".join(kept)
+
 
 def _scene_stats(update_count: int, known_sels: Set[str], id_map: Dict[str, str]) -> Dict[str, Any]:
     """Compute simple, policy-friendly scene stats for context gating."""
@@ -1081,6 +1151,12 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
         if history_init_err is not None:
             _ctx_trace(f"[trace] history_init_error={_short_exc(history_init_err)}")
         _ctx_trace(f"[trace] vec_enabled_cfg={vec_enabled} vec_obj={'ON' if (vec and vec.enabled) else 'OFF'}")
+        if vec is not None:
+            _ctx_trace(f"[trace] vec_init_stage={getattr(vec, 'init_stage', None)}")
+            if getattr(vec, "embedding_source", None):
+                _ctx_trace(f"[trace] vec_embedding_source={vec.embedding_source}")
+            if getattr(vec, "init_error", None):
+                _ctx_trace(f"[trace] vec_init_error={vec.init_error}")
         if _env_flag("MOLCOMMANDNL_FORCE_CONTEXT"):
             _ctx_trace("[trace] MOLCOMMANDNL_FORCE_CONTEXT=1 (demo mode)")
 
@@ -1266,6 +1342,9 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
         dsl_prog = repair_common_arg_mistakes(dsl_prog)
         dsl_prog = repair_sel_all_to_last(dsl_prog, last_all_sel)
         dsl_prog = repair_missing_sel_args(dsl_prog, last_all_sel)
+
+        # Drop malformed hallucinated add_structure(...) lines before validation.
+        dsl_prog = drop_spurious_unloadable_add_structure(dsl_prog)
 
         # REAL FIX: if model outputs sel="all_3eam" etc, and it's unknown and user didn't say "3eam",
         # rewrite it to the last focused selection (so "show surface" acts on the last loaded object).
