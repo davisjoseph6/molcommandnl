@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+molcommand.context_gate
+
 LLM-steered context gate.
 
 Decides whether an utterance should be processed with scene context, using:
@@ -12,15 +14,20 @@ Patch notes:
 - Supports multiple LLM client method names/signatures (complete/chat/generate/invoke/...)
 - Gracefully extracts text from common response shapes (str/dict/object)
 - Tolerates fenced YAML/JSON output and parse failures more robustly
+- FAIL-OPEN behavior: if LLM call fails, we still apply policy bias (threshold/complexity)
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import json
 import re
-import yaml
+
+try:
+    import yaml  # type: ignore
+except Exception:  # pragma: no cover
+    yaml = None
 
 
 @dataclass
@@ -41,9 +48,10 @@ class ContextGate:
         llm_cfg = gate_cfg.get("llm", {}) if isinstance(gate_cfg, dict) else {}
 
         self.update_threshold = int(gate_cfg.get("update_threshold", 0))
-
         self.complexity_cfg = gate_cfg.get("complexity", {"enabled": False})
+
         self.output_format = str(llm_cfg.get("output_format", "yaml")).lower()
+        self.max_retries = int(llm_cfg.get("max_retries", 1))
 
         system_prompt_path = llm_cfg.get("system_prompt_path")
         user_prompt_path = llm_cfg.get("user_prompt_path")
@@ -66,11 +74,36 @@ class ContextGate:
         )
 
     def decide(self, utterance: str, scene_stats: Dict[str, Any]) -> ContextDecision:
-        """Return categories + requires_context, applying threshold bias."""
+        """
+        Return categories + requires_context, applying threshold/complexity bias.
+
+        FAIL-OPEN behavior:
+        - If the LLM call fails, we return empty categories + requires_context=False initially,
+          but we still apply policy bias (updates threshold / complexity threshold).
+        """
         user_prompt = self.user_prompt_tmpl.format(utterance=utterance)
 
-        raw = self._call_llm_classifier(system=self.system_prompt, user=user_prompt)
-        categories, requires = self._parse_output(raw)
+        raw = ""
+        categories: List[str] = []
+        requires = False
+
+        # Try to call classifier. If it fails, we still proceed with policy bias.
+        last_err: Optional[Exception] = None
+        for _ in range(max(1, self.max_retries)):
+            try:
+                raw = self._call_llm_classifier(system=self.system_prompt, user=user_prompt)
+                categories, requires = self._parse_output(raw)
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                raw = raw or ""
+                categories = []
+                requires = False
+
+        if last_err is not None and not raw:
+            # keep raw empty; caller can trace decide_error if they catch exceptions around decide()
+            pass
 
         # Policy bias: if scene is complex enough, force context (config-driven).
         updates = int(scene_stats.get("updates", 0))
@@ -93,7 +126,8 @@ class ContextGate:
         and signatures.
 
         Tries methods in this order:
-          complete, chat, generate, invoke, ask, __call__
+          complete, complete_text, completion, chat, chat_completion, generate, invoke, ask,
+          call, run, predict, __call__
         """
         client = self.llm_client
         if client is None:
@@ -105,11 +139,23 @@ class ContextGate:
         ]
         combined_prompt = f"{system}\n\n{user}".strip()
 
-        candidate_methods: List[str] = ["complete", "chat", "generate", "invoke", "ask"]
+        candidate_methods: List[str] = [
+            "complete",
+            "complete_text",
+            "completion",
+            "chat",
+            "chat_completion",
+            "generate",
+            "invoke",
+            "ask",
+            "call",
+            "run",
+            "predict",
+        ]
         if callable(client):
             candidate_methods.append("__call__")
 
-        last_exc: Exception | None = None
+        last_exc: Optional[Exception] = None
 
         for method_name in candidate_methods:
             fn = client if method_name == "__call__" else getattr(client, method_name, None)
@@ -118,15 +164,25 @@ class ContextGate:
 
             # Try several common signatures for each method.
             attempts = [
-                # most explicit
+                # explicit system/user
                 {"kwargs": {"system": system, "user": user}},
                 {"kwargs": {"system_prompt": system, "user_prompt": user}},
+                {"kwargs": {"system": system, "prompt": user}},
+                # messages style
                 {"kwargs": {"messages": messages}},
-                {"kwargs": {"prompt": combined_prompt}},
-                # mixed
                 {"args": [messages]},
+                # prompt style
+                {"kwargs": {"prompt": combined_prompt}},
+                {"kwargs": {"input": combined_prompt}},
+                {"kwargs": {"query": combined_prompt}},
+                {"kwargs": {"text": combined_prompt}},
                 {"args": [combined_prompt]},
+                # minimal
                 {"args": [user]},
+                {"kwargs": {"prompt": user}},
+                {"kwargs": {"input": user}},
+                # (system, user)
+                {"args": [system, user]},
             ]
 
             for attempt in attempts:
@@ -136,27 +192,25 @@ class ContextGate:
                     resp = fn(*args, **kwargs)
                     text = self._extract_text(resp)
                     if text is None:
-                        # We called something but could not decode response shape.
-                        # Try next signature/method.
                         continue
                     return text
                 except TypeError as e:
-                    # Signature mismatch -> try next signature
                     last_exc = e
                     continue
                 except Exception as e:
-                    # Runtime error from the method -> try next method/signature
                     last_exc = e
                     continue
 
         if last_exc is not None:
             raise last_exc
+
         raise AttributeError(
             "LLM client has no compatible method/signature for ContextGate "
-            "(tried complete/chat/generate/invoke/ask/__call__)."
+            "(tried complete/complete_text/completion/chat/chat_completion/generate/"
+            "invoke/ask/call/run/predict/__call__)."
         )
 
-    def _extract_text(self, resp: Any) -> str | None:
+    def _extract_text(self, resp: Any) -> Optional[str]:
         """Extract text from common response shapes returned by LLM clients."""
         if resp is None:
             return None
@@ -167,12 +221,12 @@ class ContextGate:
         # Common dict-based shapes
         if isinstance(resp, dict):
             # direct text-like keys
-            for key in ("text", "content", "response", "output", "raw"):
+            for key in ("text", "content", "response", "output", "raw", "result", "completion", "output_text"):
                 val = resp.get(key)
                 if isinstance(val, str):
                     return val
 
-            # OpenAI-like: {"choices": [{"message": {"content": "..."} }]}
+            # OpenAI chat-like: {"choices": [{"message": {"content": "..."} }]}
             choices = resp.get("choices")
             if isinstance(choices, list) and choices:
                 ch0 = choices[0]
@@ -183,15 +237,33 @@ class ContextGate:
                     if isinstance(ch0.get("text"), str):
                         return ch0["text"]
 
-            # messages-style content list
+            # Anthropic-like: {"content": [{"text": "..."}]}
+            content = resp.get("content")
+            if isinstance(content, list) and content:
+                c0 = content[0]
+                if isinstance(c0, dict) and isinstance(c0.get("text"), str):
+                    return c0["text"]
+
+            # OpenAI Responses-like: {"output": [{"content":[{"text":"..."}]}]}
+            out = resp.get("output")
+            if isinstance(out, list) and out:
+                o0 = out[0]
+                if isinstance(o0, dict):
+                    oc = o0.get("content")
+                    if isinstance(oc, list) and oc:
+                        oc0 = oc[0]
+                        if isinstance(oc0, dict) and isinstance(oc0.get("text"), str):
+                            return oc0["text"]
+
+            # messages-style
             msg = resp.get("message")
             if isinstance(msg, dict):
-                content = msg.get("content")
-                if isinstance(content, str):
-                    return content
+                content2 = msg.get("content")
+                if isinstance(content2, str):
+                    return content2
 
         # Object-based shapes
-        for attr in ("text", "content", "response", "output", "raw"):
+        for attr in ("text", "content", "response", "output", "raw", "result", "completion", "output_text"):
             if hasattr(resp, attr):
                 val = getattr(resp, attr)
                 if isinstance(val, str):
@@ -236,16 +308,18 @@ class ContextGate:
         if not txt.startswith("```"):
             return txt
 
-        # Remove first fence line
         lines = txt.splitlines()
         if not lines:
             return txt
 
+        # Drop first fence line
         if lines[0].startswith("```"):
             lines = lines[1:]
-        # Remove trailing fence if present
+
+        # Drop last fence line
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
+
         return "\n".join(lines).strip()
 
     # ------------------------------------------------------------------
@@ -256,7 +330,7 @@ class ContextGate:
         if not txt:
             return [], False
 
-        # 1) Preferred format first
+        # Preferred format first
         if self.output_format == "json":
             parsed = self._try_parse_json(txt)
             if parsed is not None:
@@ -272,26 +346,28 @@ class ContextGate:
             if parsed is not None:
                 return parsed
 
-        # 2) Fallback regex parsing (very tolerant)
+        # Fallback regex parsing
         cats = self._regex_parse_categories(txt)
         req = self._regex_parse_requires_context(txt)
         return cats, req
 
-    def _try_parse_json(self, txt: str) -> Tuple[List[str], bool] | None:
+    def _try_parse_json(self, txt: str) -> Optional[Tuple[List[str], bool]]:
         try:
             obj = json.loads(txt)
         except Exception:
             return None
         return self._coerce_output_object(obj)
 
-    def _try_parse_yaml(self, txt: str) -> Tuple[List[str], bool] | None:
+    def _try_parse_yaml(self, txt: str) -> Optional[Tuple[List[str], bool]]:
+        if yaml is None:
+            return None
         try:
-            obj = yaml.safe_load(txt)
+            obj = yaml.safe_load(txt)  # type: ignore[attr-defined]
         except Exception:
             return None
         return self._coerce_output_object(obj)
 
-    def _coerce_output_object(self, obj: Any) -> Tuple[List[str], bool] | None:
+    def _coerce_output_object(self, obj: Any) -> Optional[Tuple[List[str], bool]]:
         if not isinstance(obj, dict):
             return None
 
@@ -302,6 +378,7 @@ class ContextGate:
             or obj.get("entity_categories")
             or []
         )
+
         if isinstance(cats, str):
             cats_list = [cats]
         elif isinstance(cats, list):
@@ -324,11 +401,7 @@ class ContextGate:
 
     @staticmethod
     def _regex_parse_categories(txt: str) -> List[str]:
-        # Examples:
-        # Categories: [structure, selection]
-        # Categories:
-        #   - structure
-        #   - selection
+        # Inline: Categories: [structure, selection]
         m_inline = re.search(r"(?im)^\s*categories\s*:\s*\[(.*?)\]\s*$", txt)
         if m_inline:
             raw_items = m_inline.group(1)

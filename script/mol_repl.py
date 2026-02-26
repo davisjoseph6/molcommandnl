@@ -37,7 +37,7 @@ Option 2 (DEMO RAW):
 
 Context tracing / demo instrumentation:
 - MOLCOMMANDNL_TRACE_CONTEXT=1 prints gate/history/retrieval decisions and payload info.
-- MOLCOMMANDNL_FORCE_CONTEXT=1 forces requires_ctx=True (useful for live demos).
+- MOLCOMMANDNL_FORCE_CONTEXT=1 forces context usage (useful for live demos).
 
 Notes on Chroma logging:
 - We must set telemetry env vars and logger levels BEFORE importing anything that
@@ -134,6 +134,12 @@ except Exception:
     ContextGate = None
     ContextHistory = None
 
+# --- vector store (optional) ---
+try:
+    from molcommand.vector_store import HistoryVectorStore  # noqa: E402
+except Exception:
+    HistoryVectorStore = None
+
 
 # =============================================================================
 # Policy loading utilities
@@ -169,143 +175,6 @@ def _policy_get(d: Dict[str, Any], keys: str, default: Any) -> Any:
             return default
         cur = cur[part]
     return cur
-
-
-# =============================================================================
-# Optional vector store for history retrieval (policy-enabled)
-# =============================================================================
-class HistoryVectorStore:
-    """
-    Optional Chroma-backed vector store for scene history retrieval.
-
-    This is best-effort and will gracefully disable itself if:
-    - chromadb is not installed
-    - an embedding function is not available
-    - directory/collection cannot be created
-
-    It stores "turn documents" as:
-        User: <utterance>\nExec: <dsl>
-
-    Patch notes:
-    - exposes init diagnostics (init_stage, init_error)
-    - traces why vector store is OFF
-    """
-
-    def __init__(self, chroma_dir: str, collection: str) -> None:
-        self.enabled = False
-        self._client = None
-        self._collection = None
-
-        self.init_stage = "start"
-        self.init_error: Optional[str] = None
-        self.embedding_source: Optional[str] = None
-
-        try:
-            import chromadb  # type: ignore
-        except Exception as e:
-            self.init_stage = "import_chromadb"
-            self.init_error = _short_exc(e)
-            return
-
-        embed_fn, embed_diag, embed_src = self._try_get_embedding_function()
-        self.embedding_source = embed_src
-        if embed_fn is None:
-            self.init_stage = "embedding_function"
-            self.init_error = embed_diag or "No usable embedding function found"
-            return
-
-        try:
-            self.init_stage = "persistent_client"
-            self._client = chromadb.PersistentClient(path=chroma_dir)
-
-            self.init_stage = "collection"
-            try:
-                self._collection = self._client.get_or_create_collection(
-                    name=collection,
-                    embedding_function=embed_fn,
-                )
-            except TypeError:
-                # Some Chroma versions don't accept embedding_function here.
-                self._collection = self._client.get_or_create_collection(name=collection)
-                self._collection._embedding_function = embed_fn  # type: ignore[attr-defined]
-
-            self.enabled = True
-            self.init_stage = "ready"
-            self.init_error = None
-        except Exception as e:
-            self.enabled = False
-            self.init_stage = "collection_init"
-            self.init_error = _short_exc(e)
-
-    @staticmethod
-    def _try_get_embedding_function():
-        """
-        Try to locate an embedding function in the repo, without hardcoding dependencies.
-
-        Returns:
-            (embed_fn_or_none, diagnostic_string, source_path_or_none)
-
-        Priority:
-        - script/get_embedding_function.py (used elsewhere in your repo)
-        """
-        candidates = [
-            os.path.join(ROOT, "script", "get_embedding_function.py"),
-            os.path.join(ROOT, "get_embedding_function.py"),
-        ]
-
-        diagnostics: List[str] = []
-
-        for p in candidates:
-            if not os.path.exists(p):
-                diagnostics.append(f"{p}: not found")
-                continue
-            try:
-                spec = importlib.util.spec_from_file_location("get_embedding_function", p)
-                if spec is None or spec.loader is None:
-                    diagnostics.append(f"{p}: could not create import spec")
-                    continue
-
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-
-                fn = getattr(mod, "get_embedding_function", None)
-                if not callable(fn):
-                    diagnostics.append(f"{p}: get_embedding_function not callable/missing")
-                    continue
-
-                embed_fn = fn()
-                return embed_fn, None, p
-            except Exception as e:
-                diagnostics.append(f"{p}: {_short_exc(e)}")
-
-        return None, " | ".join(diagnostics), None
-
-    def upsert_turn(self, turn_id: int, text: str, meta: Optional[Dict[str, Any]] = None) -> None:
-        if not self.enabled or self._collection is None:
-            return
-        try:
-            self._collection.upsert(
-                ids=[f"t{turn_id}"],
-                documents=[text],
-                metadatas=[meta or {}],
-            )
-        except Exception:
-            return
-
-    def query_turn_ids(self, query: str, top_k: int) -> List[int]:
-        if not self.enabled or self._collection is None:
-            return []
-        try:
-            res = self._collection.query(query_texts=[query], n_results=top_k)
-            ids = (res.get("ids") or [[]])[0]
-            out: List[int] = []
-            for rid in ids:
-                m = re.match(r"^t(\d+)$", str(rid))
-                if m:
-                    out.append(int(m.group(1)))
-            return out
-        except Exception:
-            return []
 
 
 # =============================================================================
@@ -579,9 +448,7 @@ def _demo_should_skip_fetch(pdbid: str, alias: str) -> bool:
 
 
 def _demo_exec(unitymol, user_line: str) -> None:
-    """
-    Execute a single demo command by directly calling UnityMolZMQ methods.
-    """
+    """Execute a single demo command by directly calling UnityMolZMQ methods."""
     line = (user_line or "").strip()
     low = line.lower()
 
@@ -737,9 +604,7 @@ def nl_pre_rewrite(q: str) -> str:
 
 
 def repair_sel_all_to_last(dsl_text: str, last_all_sel: str) -> str:
-    """
-    Rewrite sel="all" -> sel="<last_all_sel>" once we have a focused structure selection.
-    """
+    """Rewrite sel="all" -> sel="<last_all_sel>" once we have a focused structure selection."""
     if not last_all_sel or last_all_sel == "all":
         return dsl_text
 
@@ -753,7 +618,6 @@ def repair_sel_all_to_last(dsl_text: str, last_all_sel: str) -> str:
         f'hide(sel="{last_all_sel}")',
         dsl_text,
     )
-    # FIX: do NOT inject an extra "target=" (it corrupts the DSL)
     dsl_text = re.sub(
         r'color_by_chain\(\s*sel\s*=\s*"all"\s*,',
         f'color_by_chain(sel="{last_all_sel}",',
@@ -781,6 +645,11 @@ def repair_missing_sel_args(dsl_text: str, last_all_sel: str) -> str:
     return dsl_text
 
 
+def _mentioned_pdb_codes(nl_query: str) -> Set[str]:
+    """Return 4-char PDB-like tokens explicitly mentioned by the user in the NL query."""
+    return {m.group(0).lower() for m in re.finditer(r"\b[0-9][A-Za-z0-9]{3}\b", nl_query or "")}
+
+
 def repair_unknown_all_sel_to_last(
     nl_query: str,
     dsl_text: str,
@@ -788,11 +657,9 @@ def repair_unknown_all_sel_to_last(
     known_sels: Set[str],
 ) -> str:
     """
-    Real REPL fix:
     If the model copied an example selection like sel="all_3eam" that does not exist
     in this session, and the user did NOT explicitly mention that PDB code,
-    rewrite it to the current focus (last_all_sel) to avoid:
-        [Warning] No selection named 'all_3eam'
+    rewrite it to the current focus (last_all_sel).
     """
     if (
         not last_all_sel
@@ -804,10 +671,8 @@ def repair_unknown_all_sel_to_last(
     mentioned = _mentioned_pdb_codes(nl_query)
 
     def _repl(m: re.Match) -> str:
-        sel = m.group(1)  # e.g. all_3eam
+        sel = m.group(1)
         code = sel.split("_", 1)[1].lower()
-
-        # Only rewrite if it's unknown AND user didn't mention it.
         if sel not in known_sels and code not in mentioned:
             return f'sel="{last_all_sel}"'
         return m.group(0)
@@ -847,11 +712,6 @@ def _dedupe_preserve_order(lines: List[str]) -> List[str]:
     return out
 
 
-def _mentioned_pdb_codes(nl_query: str) -> Set[str]:
-    """Return 4-char PDB-like tokens explicitly mentioned by the user in the NL query."""
-    return {m.group(0).lower() for m in re.finditer(r"\b[0-9][A-Za-z0-9]{3}\b", nl_query or "")}
-
-
 def _planned_add_structure_codes(lines: List[str]) -> Set[str]:
     """Return PDB codes already planned to be loaded in this DSL program."""
     out: Set[str] = set()
@@ -876,10 +736,7 @@ def ensure_user_mentioned_structures_loaded(
     dsl_text: str,
     known_sels: Set[str],
 ) -> str:
-    """
-    If the DSL references all_<pdb> but that selection doesn't exist yet,
-    prepend add_structure(PDBID="<pdb>") ONLY if the PDB code appeared in the NL query.
-    """
+    """Prepend add_structure(PDBID=...) if user mentioned that code and selection isn't known."""
     lines = _split_lines(dsl_text)
     mentioned = _mentioned_pdb_codes(nl_query)
     if not mentioned:
@@ -905,10 +762,7 @@ def ensure_user_mentioned_structures_loaded(
 
 
 def drop_unknown_selections_in_dev_loose(dsl_text: str, known_sels: Set[str]) -> str:
-    """
-    DEV-LOOSE safety: drop lines referencing selections we don't know exist
-    (unless they will be created by add_structure in the same DSL program).
-    """
+    """DEV-LOOSE: drop lines referencing selections we don't know exist."""
     lines = _split_lines(dsl_text)
     planned = _planned_add_structure_codes(lines)
 
@@ -929,17 +783,13 @@ def drop_unknown_selections_in_dev_loose(dsl_text: str, known_sels: Set[str]) ->
     kept = _dedupe_preserve_order(kept)
     return "\n".join(kept)
 
+
 def drop_spurious_unloadable_add_structure(dsl_text: str) -> str:
     """
-    Drop malformed hallucinated add_structure(...) lines that cannot be validly executed
-    because they omit both PDBID= and FILEPATH=.
-
+    Drop malformed hallucinated add_structure(...) lines that omit both PDBID= and FILEPATH=.
     Examples dropped:
       add_structure()
       add_structure(name="example")
-
-    This prevents otherwise-valid follow-up lines (e.g., show/cartoon) from failing
-    validation due to a bogus prepended add_structure line.
     """
     lines = _split_lines(dsl_text)
     if not lines:
@@ -962,6 +812,118 @@ def drop_spurious_unloadable_add_structure(dsl_text: str) -> str:
 
     kept = _dedupe_preserve_order(kept)
     return "\n".join(kept)
+
+def drop_unmentioned_add_structure_pdbid(
+    nl_query: str,
+    dsl_text: str,
+    last_all_sel: str,
+) -> str:
+    """
+    Drop hallucinated add_structure(PDBID="XXXX") lines when the user did NOT mention XXXX.
+
+    Allowed:
+    - user explicitly mentioned the PDB code in NL
+    - the PDB code matches the current focus (last_all_sel = all_xxxx), because it may be
+      a harmless redundant reload (but usually shouldn't happen)
+
+    This prevents retrieval-example leakage like add_structure(PDBID="1kx2") during
+    "color it red".
+    """
+    lines = _split_lines(dsl_text)
+    if not lines:
+        return dsl_text
+
+    mentioned = _mentioned_pdb_codes(nl_query)
+
+    focus_code = None
+    if isinstance(last_all_sel, str) and last_all_sel.startswith("all_") and len(last_all_sel) >= 8:
+        focus_code = last_all_sel.split("_", 1)[1].lower()
+
+    kept: List[str] = []
+    dropped: List[str] = []
+
+    for ln in lines:
+        m = re.match(r'^\s*add_structure\(\s*PDBID\s*=\s*"([0-9A-Za-z]{4})"\s*\)\s*$', ln)
+        if m:
+            code = m.group(1).lower()
+            if code not in mentioned and code != focus_code:
+                dropped.append(ln)
+                continue
+        kept.append(ln)
+
+    if dropped:
+        _ctx_trace("[rewrite] dropped unmentioned add_structure(PDBID=...) lines: " + repr(dropped))
+
+    kept = _dedupe_preserve_order(kept)
+    return "\n".join(kept)
+
+
+async def repair_color_by_chain_with_color_arg(dsl_text: str) -> str:
+    """
+    Handle invalid DSL produced for "color it red" that looks like:
+        color_by_chain(sel="...", target="atom", color="red")
+
+    Strategy:
+    1) Try to convert it into a direct-color command IF your DSL supports one:
+         color(sel="...", rep="atom", color="red")
+         color_selection(...)
+         colorSelection(...)
+         (we probe with validate_dsl)
+    2) Otherwise, drop the color= argument and keep a valid color_by_chain:
+         color_by_chain(sel="...", target="atom")
+
+    This keeps the REPL robust without hardcoding scene logic.
+    """
+    lines = _split_lines(dsl_text)
+    if not lines:
+        return dsl_text
+
+    changed = False
+    out: List[str] = []
+
+    pat = re.compile(
+        r'^\s*color_by_chain\(\s*sel\s*=\s*"([^"]+)"\s*,\s*target\s*=\s*"([^"]+)"\s*,\s*color\s*=\s*"([^"]+)"\s*\)\s*$'
+    )
+
+    for ln in lines:
+        m = pat.match(ln)
+        if not m:
+            out.append(ln)
+            continue
+
+        sel, target, color = m.group(1), m.group(2), m.group(3)
+
+        # Candidate direct-color DSL commands (only used if validate_dsl says OK)
+        candidates = [
+            f'color(sel="{sel}", rep="{target}", color="{color}")',
+            f'color_selection(sel="{sel}", rep="{target}", color="{color}")',
+            f'colorSelection(sel="{sel}", rep="{target}", color="{color}")',
+            f'color(sel="{sel}", target="{target}", color="{color}")',
+        ]
+
+        replaced = None
+        for cand in candidates:
+            try:
+                vv = await validate_dsl(cand)
+            except Exception:
+                vv = {"ok": False}
+            if vv.get("ok"):
+                replaced = cand
+                break
+
+        if replaced is not None:
+            out.append(replaced)
+            changed = True
+        else:
+            # Fallback: keep valid color_by_chain by removing color=
+            out.append(f'color_by_chain(sel="{sel}", target="{target}")')
+            changed = True
+
+    if changed:
+        _ctx_trace("[rewrite] repaired color_by_chain(..., color=...) lines")
+
+    out = _dedupe_preserve_order(out)
+    return "\n".join(out)
 
 
 def _scene_stats(update_count: int, known_sels: Set[str], id_map: Dict[str, str]) -> Dict[str, Any]:
@@ -1013,7 +975,7 @@ def _select_context_turns(
     query: str,
     recent_turns: int,
     top_k: int,
-    vector_store: Optional[HistoryVectorStore],
+    vector_store: Any,
 ) -> List[Any]:
     """
     Choose context turns as union of:
@@ -1040,8 +1002,11 @@ def _select_context_turns(
     except Exception:
         pass
 
-    if vector_store and vector_store.enabled:
-        ids = vector_store.query_turn_ids(query, top_k=top_k)
+    if vector_store is not None and getattr(vector_store, "enabled", False):
+        try:
+            ids = vector_store.query_turn_ids(query, top_k=top_k)
+        except Exception:
+            ids = []
         for tid in ids:
             try:
                 t = history._find_turn(tid)  # type: ignore[attr-defined]
@@ -1097,6 +1062,7 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
 
     history = None
     history_init_err: Optional[Exception] = None
+    jsonl_path = None
     if ContextHistory is not None:
         try:
             jsonl_path = _policy_get(policy, "context_retrieval.history_store.jsonl_path", None)
@@ -1114,8 +1080,8 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
             history_init_err = e
 
     vec = None
-    vec_enabled = bool(_policy_get(policy, "context_retrieval.vector_store.enabled", False))
-    if vec_enabled:
+    vec_enabled_cfg = bool(_policy_get(policy, "context_retrieval.vector_store.enabled", False))
+    if vec_enabled_cfg and HistoryVectorStore is not None:
         chroma_hist_dir = str(_policy_get(policy, "context_retrieval.vector_store.chroma_dir", "data/chroma_history"))
         collection = str(_policy_get(policy, "context_retrieval.vector_store.collection", "scene_history"))
         if not os.path.isabs(chroma_hist_dir):
@@ -1135,12 +1101,13 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
             print("[policy] context_gate unavailable (missing deps/import error); continuing without gate.")
         if ContextHistory is None or history is None:
             print("[policy] context_history unavailable (missing deps/import error); continuing without history.")
-        if vec_enabled:
-            print(f"[policy] vector_store={'on' if (vec and vec.enabled) else 'off'}")
+        if vec_enabled_cfg:
+            print(f"[policy] vector_store={'on' if (vec and getattr(vec, 'enabled', False)) else 'off'}")
 
     if _trace_context_enabled():
         _ctx_trace(f"[trace] policy_loaded={bool(policy)} path={policy_path}")
         _ctx_trace(f"[trace] retrieval_enabled={retrieval_enabled} recent_turns={recent_turns} top_k={top_k}")
+        _ctx_trace(f"[trace] history_jsonl_path={jsonl_path}")
         _ctx_trace(f"[trace] gate_class_imported={ContextGate is not None} gate_obj={'ON' if gate is not None else 'OFF'}")
         if gate_init_err is not None:
             _ctx_trace(f"[trace] gate_init_error={_short_exc(gate_init_err)}")
@@ -1150,7 +1117,7 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
         )
         if history_init_err is not None:
             _ctx_trace(f"[trace] history_init_error={_short_exc(history_init_err)}")
-        _ctx_trace(f"[trace] vec_enabled_cfg={vec_enabled} vec_obj={'ON' if (vec and vec.enabled) else 'OFF'}")
+        _ctx_trace(f"[trace] vec_enabled_cfg={vec_enabled_cfg} vec_obj={'ON' if (vec and getattr(vec, 'enabled', False)) else 'OFF'}")
         if vec is not None:
             _ctx_trace(f"[trace] vec_init_stage={getattr(vec, 'init_stage', None)}")
             if getattr(vec, "embedding_source", None):
@@ -1229,9 +1196,18 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
             requires_ctx = True
             _ctx_trace("[gate] requires_ctx forced -> True (MOLCOMMANDNL_FORCE_CONTEXT=1)")
 
+        # NEW: final decision uses ContextHistory heuristic fallback
+        use_ctx = requires_ctx
+        if history is not None:
+            try:
+                use_ctx = bool(history.should_use_context(q, llm_requires_context=requires_ctx))
+            except Exception as e:
+                use_ctx = requires_ctx
+                _ctx_trace(f"[gate] history_should_use_context_error={_short_exc(e)}")
+
         _ctx_trace(
             f"[gate] gate_obj={'ON' if gate is not None else 'OFF'} "
-            f"requires_ctx={requires_ctx} categories={categories} stats={stats}"
+            f"requires_ctx={requires_ctx} use_ctx={use_ctx} categories={categories} stats={stats}"
         )
 
         context_payload = dict(base_context or {})
@@ -1239,10 +1215,10 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
 
         _ctx_trace(
             f"[ctx-check] retrieval_enabled={retrieval_enabled} "
-            f"requires_ctx={requires_ctx} history_is_none={history is None}"
+            f"requires_ctx={requires_ctx} use_ctx={use_ctx} history_is_none={history is None}"
         )
 
-        if retrieval_enabled and requires_ctx and history is not None:
+        if retrieval_enabled and use_ctx and history is not None:
             chosen_turns = _select_context_turns(
                 history=history,
                 query=q,
@@ -1262,11 +1238,12 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
                 "known_selections": sorted(list(known_sels))[:200],
                 "last_all_sel": last_all_sel,
                 "history": turn_context_block,
+                "use_ctx": use_ctx,
+                "requires_ctx": requires_ctx,
             })
 
             _ctx_trace(
-                f"[ctx-build] chosen_turns={len(chosen_turns)} "
-                f"history_chars={len(turn_context_block)}"
+                f"[ctx-build] chosen_turns={len(chosen_turns)} history_chars={len(turn_context_block)}"
             )
 
         context_for_interp = context_payload if context_payload else None
@@ -1294,6 +1271,7 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
                         "known_sels": sorted(list(known_sels))[:200],
                         "last_all_sel": last_all_sel,
                         "requires_ctx": requires_ctx,
+                        "use_ctx": use_ctx,
                         "categories": categories,
                     },
                 )
@@ -1346,9 +1324,16 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
         # Drop malformed hallucinated add_structure(...) lines before validation.
         dsl_prog = drop_spurious_unloadable_add_structure(dsl_prog)
 
-        # REAL FIX: if model outputs sel="all_3eam" etc, and it's unknown and user didn't say "3eam",
-        # rewrite it to the last focused selection (so "show surface" acts on the last loaded object).
+        # Drop hallucinated loads of unrelated PDB IDs
+        dsl_prog = drop_unmentioned_add_structure_pdbid(q, dsl_prog, last_all_sel)
+
+        # Fix invalid "color_by_chain(..., color=...)" forms (try direct-color if supported)
+        dsl_prog = await repair_color_by_chain_with_color_arg(dsl_prog)
+
         dsl_prog = repair_unknown_all_sel_to_last(q, dsl_prog, last_all_sel, known_sels)
+
+        # Rewrite unknown all_<code> selections to last_all_sel when user didn't mention that code.
+        # dsl_prog = repair_unknown_all_sel_to_last(q, dsl_prog, last_all_sel, known_sels)
 
         if os.environ.get("MCL_PREFER_OBJECT_ID") == "1":
             dsl_prog = prefer_object_id(dsl_prog)
@@ -1449,7 +1434,7 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
             except Exception as e:
                 _ctx_trace(f"[history] add_execution_error(normal)={_short_exc(e)}")
 
-            if vec is not None and vec.enabled:
+            if vec is not None and getattr(vec, "enabled", False):
                 try:
                     doc = f"User: {q}\nExec: {dsl_prog}"
                     vec.upsert_turn(
@@ -1491,41 +1476,20 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--entity",
-        default=None,
-        help="Optional entity hint (e.g. 'structure', 'selection', 'representation').",
-    )
-    ap.add_argument(
-        "--with-context",
-        action="store_true",
-        help="Use a tiny demo context object (legacy demo).",
-    )
-    ap.add_argument(
-        "--dev",
-        action="store_true",
-        help="Enable DEV-mode DSL normalization (sets MOLCOMMANDNL_DEV=1).",
-    )
-    ap.add_argument(
-        "--dev-loose",
-        action="store_true",
-        help="Enable loose DEV normalization (sets MOLCOMMANDNL_DEV_LOOSE=1; implies --dev).",
-    )
-    ap.add_argument(
-        "--show-norm",
-        action="store_true",
-        help="Print DEV normalizer steps when it changes the DSL (sets MOLCOMMANDNL_SHOW_NORM=1).",
-    )
-    ap.add_argument(
-        "--demo-raw",
-        action="store_true",
-        help="DEMO MODE: bypass retrieval + DSL normalization/grammar/validation; execute UnityMolX directly over ZMQ.",
-    )
-    ap.add_argument(
-        "--policy",
-        default=None,
-        help="Path to context_policy.yaml (default: config/context_policy.yaml).",
-    )
+    ap.add_argument("--entity", default=None,
+                    help="Optional entity hint (e.g. 'structure', 'selection', 'representation').")
+    ap.add_argument("--with-context", action="store_true",
+                    help="Use a tiny demo context object (legacy demo).")
+    ap.add_argument("--dev", action="store_true",
+                    help="Enable DEV-mode DSL normalization (sets MOLCOMMANDNL_DEV=1).")
+    ap.add_argument("--dev-loose", action="store_true",
+                    help="Enable loose DEV normalization (sets MOLCOMMANDNL_DEV_LOOSE=1; implies --dev).")
+    ap.add_argument("--show-norm", action="store_true",
+                    help="Print DEV normalizer steps when it changes the DSL (sets MOLCOMMANDNL_SHOW_NORM=1).")
+    ap.add_argument("--demo-raw", action="store_true",
+                    help="DEMO MODE: bypass retrieval + DSL normalization/grammar/validation; execute UnityMolX directly over ZMQ.")
+    ap.add_argument("--policy", default=None,
+                    help="Path to context_policy.yaml (default: config/context_policy.yaml).")
 
     args = ap.parse_args()
 
