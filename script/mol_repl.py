@@ -687,6 +687,30 @@ def maybe_focus_last_all_sel_from_program(dsl_prog: str) -> Optional[str]:
         return m.group(1)
     return None
 
+def infer_last_rep_from_history(history: Any, default_rep: str = "surface") -> str:
+    """
+    Infer the most recent representation used via show(..., rep="...") in history.
+
+    This avoids hardcoding a rep like "atom" that UnityMol rejects.
+    """
+    if history is None:
+        return default_rep
+
+    turns = getattr(history, "_turns", None)
+    if not isinstance(turns, list):
+        return default_rep
+
+    for t in reversed(turns):
+        dsl = getattr(t, "dsl", None)
+        if not isinstance(dsl, str) or not dsl.strip():
+            continue
+
+        # Find the most recent show(... rep="X")
+        m = re.search(r'\bshow\(\s*[^)]*?\brep\s*=\s*"([^"]+)"', dsl)
+        if m:
+            return m.group(1).strip().lower()
+
+    return default_rep
 
 def repair_common_arg_mistakes(dsl_text: str) -> str:
     """Fix common arg-name mistakes (safe no-op if not present)."""
@@ -858,21 +882,10 @@ def drop_unmentioned_add_structure_pdbid(
     return "\n".join(kept)
 
 
-async def repair_color_by_chain_with_color_arg(dsl_text: str) -> str:
+async def repair_color_by_chain_with_color_arg(dsl_text: str, preferred_rep: str = "surface") -> str:
     """
-    Handle invalid DSL produced for "color it red" that looks like:
-        color_by_chain(sel="...", target="atom", color="red")
-
-    Strategy:
-    1) Try to convert it into a direct-color command IF your DSL supports one:
-         color(sel="...", rep="atom", color="red")
-         color_selection(...)
-         colorSelection(...)
-         (we probe with validate_dsl)
-    2) Otherwise, drop the color= argument and keep a valid color_by_chain:
-         color_by_chain(sel="...", target="atom")
-
-    This keeps the REPL robust without hardcoding scene logic.
+    Repair: color_by_chain(sel="...", target="atom", color="red")
+    -> try a direct color using preferred_rep (surface/cartoon/etc), NOT "atom".
     """
     lines = _split_lines(dsl_text)
     if not lines:
@@ -885,20 +898,35 @@ async def repair_color_by_chain_with_color_arg(dsl_text: str) -> str:
         r'^\s*color_by_chain\(\s*sel\s*=\s*"([^"]+)"\s*,\s*target\s*=\s*"([^"]+)"\s*,\s*color\s*=\s*"([^"]+)"\s*\)\s*$'
     )
 
+    # Normalize rep keywords
+    rep_map = {
+        "cartoon": "cartoon",
+        "c": "cartoon",
+        "surface": "surface",
+        "s": "surface",
+        "lines": "lines",
+        "l": "lines",
+        "spheres": "spheres",
+        "balls": "spheres",
+        "b": "spheres",
+    }
+
     for ln in lines:
         m = pat.match(ln)
         if not m:
             out.append(ln)
             continue
 
-        sel, target, color = m.group(1), m.group(2), m.group(3)
+        sel, target, color = m.group(1), m.group(2).strip().lower(), m.group(3)
 
-        # Candidate direct-color DSL commands (only used if validate_dsl says OK)
+        # If target looks like a rep keyword, honor it; otherwise use preferred_rep.
+        rep = rep_map.get(target, preferred_rep)
+
         candidates = [
-            f'color(sel="{sel}", rep="{target}", color="{color}")',
-            f'color_selection(sel="{sel}", rep="{target}", color="{color}")',
-            f'colorSelection(sel="{sel}", rep="{target}", color="{color}")',
-            f'color(sel="{sel}", target="{target}", color="{color}")',
+            f'color(sel="{sel}", rep="{rep}", color="{color}")',
+            f'color_selection(sel="{sel}", rep="{rep}", color="{color}")',
+            f'colorSelection(sel="{sel}", rep="{rep}", color="{color}")',
+            f'color(sel="{sel}", target="{rep}", color="{color}")',
         ]
 
         replaced = None
@@ -915,8 +943,8 @@ async def repair_color_by_chain_with_color_arg(dsl_text: str) -> str:
             out.append(replaced)
             changed = True
         else:
-            # Fallback: keep valid color_by_chain by removing color=
-            out.append(f'color_by_chain(sel="{sel}", target="{target}")')
+            # fallback: drop color= and keep a valid color_by_chain
+            out.append(f'color_by_chain(sel="{sel}", target="{m.group(2)}")')
             changed = True
 
     if changed:
@@ -1328,7 +1356,8 @@ async def run_repl(entity_hint=None, with_context=False, demo_raw=False, policy_
         dsl_prog = drop_unmentioned_add_structure_pdbid(q, dsl_prog, last_all_sel)
 
         # Fix invalid "color_by_chain(..., color=...)" forms (try direct-color if supported)
-        dsl_prog = await repair_color_by_chain_with_color_arg(dsl_prog)
+        preferred_rep = infer_last_rep_from_history(history, default_rep="surface")
+        dsl_prog = await repair_color_by_chain_with_color_arg(dsl_prog, preferred_rep=preferred_rep)
 
         dsl_prog = repair_unknown_all_sel_to_last(q, dsl_prog, last_all_sel, known_sels)
 
